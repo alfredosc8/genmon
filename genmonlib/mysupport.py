@@ -321,7 +321,8 @@ class MySupport(MyCommon):
                 ByteArray = ByteArray[:End]
             return str(ByteArray.decode("ascii"))
         except Exception as e1:
-            self.LogErrorLine("Error in HexStringToString: " + str(e1))
+            if self.debug:
+                self.LogErrorLine("Error in HexStringToString: " + str(e1))
             return ""
 
     # ----------  MySupport::StringIsHex  ---------------------------------------
@@ -437,6 +438,8 @@ class MySupport(MyCommon):
                                 "Invalid type in ProcessDispatchToString %s %s (2)"
                                 % (key, str(type(listitem)))
                             )
+                    if len(item) > 1:
+                        InputBuffer += "\n"
                 else:
                     InputBuffer += (
                         ("    " * indent)

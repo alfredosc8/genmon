@@ -467,6 +467,7 @@ def ProcessCommand(command):
             "support_data_json",
             "fuel_log_clear",
             "notify_message",
+            "set_button_command",
         ]:
             finalcommand = "generator: " + command
 
@@ -514,6 +515,9 @@ def ProcessCommand(command):
                     # use direct method instead of request.args.get due to unicoode
                     # input for add_maint_log for international users
                     input = request.args["edit_row_maint_log"]
+                    finalcommand += "=" + input
+                if command == "set_button_command":
+                    input = request.args["set_button_command"]
                     finalcommand += "=" + input
                 data = MyClientInterface.ProcessMonitorCommand(finalcommand)
 
@@ -3700,8 +3704,18 @@ def CacheToolTips():
     global CachedRegisterDescriptions
 
     try:
+
+        foundRegText = False
         config_section = "generac_evo_nexus"
         pathtofile = os.path.dirname(os.path.realpath(__file__))
+        try:
+            data = MyClientInterface.ProcessMonitorCommand("generator: getreglabels_json")
+            regdata = json.loads(data)
+            if len(regdata):
+                CachedRegisterDescriptions = regdata
+                foundRegText = True
+        except Exception as e1:
+            LogErrorLine("Error in CacheToolTips reading reg data")
 
         # get controller used
         if ConfigFiles[GENMON_CONFIG].HasOption("controllertype"):
@@ -3726,9 +3740,10 @@ def CacheToolTips():
 
             except Exception as e1:
                 LogError("Error reading Controller Type for H-100: " + str(e1))
-        CachedRegisterDescriptions = GetAllConfigValues(
-            os.path.join(pathtofile, "data", "tooltips.txt"), config_section
-        )
+        if not foundRegText:
+            CachedRegisterDescriptions = GetAllConfigValues(
+                os.path.join(pathtofile, "data", "tooltips.txt"), config_section
+            )
 
         CachedToolTips = GetAllConfigValues(
             os.path.join(pathtofile, "data", "tooltips.txt"), "ToolTips"
@@ -3981,6 +3996,7 @@ def LoadConfig():
     global LdapAdminGroup
     global LdapReadOnlyGroup
 
+    global ListenIPAddress
     global HTTPPort
     global HTTPAuthUser
     global HTTPAuthPass
@@ -4024,6 +4040,8 @@ def LoadConfig():
                 "usehttps", return_type=bool
             )
 
+        ListenIPAddress = ConfigFiles[GENMON_CONFIG].ReadValue("flask_listen_ip_address", default="0.0.0.0")
+        
         if ConfigFiles[GENMON_CONFIG].HasOption("http_port"):
             HTTPPort = ConfigFiles[GENMON_CONFIG].ReadValue(
                 "http_port", return_type=int, default=8000
@@ -4376,7 +4394,7 @@ if __name__ == "__main__":
     CacheToolTips()
     try:
         app.run(
-            host="0.0.0.0",
+            host=ListenIPAddress,
             port=HTTPPort,
             threaded=True,
             ssl_context=SSLContext,
@@ -4394,7 +4412,7 @@ if __name__ == "__main__":
             LogError("Retrying app.run()")
             time.sleep(2)
             app.run(
-                host="0.0.0.0",
+                host=ListenIPAddress,
                 port=HTTPPort,
                 threaded=True,
                 ssl_context=SSLContext,

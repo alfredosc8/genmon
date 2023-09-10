@@ -1135,7 +1135,7 @@ class Evolution(GeneratorController):
         if len(Value) != 4:
             return ""
         ProductModel = int(Value, 16)
-
+        # 0x02  Pre-Nexus
         # 0x03  Nexus, Air Cooled
         # 0x06  Nexus, Liquid Cooled
         # 0x09  Evolution, Air Cooled
@@ -3229,18 +3229,7 @@ class Evolution(GeneratorController):
             # this occurs if the controller has been replaced
             return "None - Controller has been replaced"
 
-        SerialNumberHex = 0x00
-        BitPosition = 0
-        for Index in range(len(Value) - 1, 0, -1):
-            TempVal = Value[Index]
-            if Index & 0x01 == 0:  # only odd positions
-                continue
-
-            HexVal = int(TempVal, 16)
-            SerialNumberHex = SerialNumberHex | ((HexVal) << (BitPosition))
-            BitPosition += 4
-
-        return "%010x" % SerialNumberHex
+        return self.HexStringToString(Value)
 
     # ------------ Evolution:GetTransferStatus ----------------------------------
     def GetTransferStatus(self):
@@ -3306,7 +3295,7 @@ class Evolution(GeneratorController):
             0x1E: "Under Voltage",  #  Validate on EvoAC
             0x1F: "Service A Due",  #  Validate on Evolution, occurred when forced service due
             0x20: "Service B Due",  #  WARNING, Validate on Evolution, occurred when service reset
-            0x22: "Canbus Error",  #  Validate on Nexus LC
+            0x22: "CANbus Error",  #  Validate on Nexus LC
             0x23: "Ignition Fault",  #  Validate on Evo LC
             0x24: "Overload",  #  Validate on Evolution Air Cooled
             0x27: "Firmware Error-25",  #  Validate on Synergy
@@ -3318,8 +3307,8 @@ class Evolution(GeneratorController):
             0x31: "Low Fuel Level",  #  Validate on Evolution, occurred when Low Fuel Level
             0x32: "Low Fuel Pressure",  #  Validate on EvoLC
             0x34: "Emergency Stop",  #  Validate on Evolution, occurred when E-Stop
-            0x38: "Very Low Battery"  #  Validate on Evolutio Air Cooled
-            # 0x72 : "Auxiliary Shutdown"   # Evo 2.0 not validated
+            0x38: "Very Low Battery",  #  Validate on Evolutio Air Cooled
+            0x72: "No Rotation Warning"   # Evo 2.0  validated
             # 0x74 : "Controller Lost Connection to Server"    # Evolution 2.0 not validated
         }
 
@@ -3453,11 +3442,10 @@ class Evolution(GeneratorController):
         }
 
         DealerInputs_Evo_LC = {
-            0x0001: [
-                True,
-                "Manual Button",
-            ],  # Bits 0, 1 and 2 are momentary and only set in the controller
-            0x0002: [True, "Auto Button"],  #  Dealer Test Menu, not in this register
+            # Bits 0, 1 and 2 are momentary and only set in the controller
+            # Dealer Test Menu, not in this register
+            0x0001: [True,"Manual Button",],  
+            0x0002: [True, "Auto Button"],    
             0x0004: [True, "Off Button"],
             0x0008: [True, "2 Wire Start"],
             0x0010: [True, "Wiring Error"],
@@ -3887,9 +3875,7 @@ class Evolution(GeneratorController):
             # if we get here we must convert the data.
             Voltage = float(self.GetVoltageOutput(ReturnInt=True))
 
-            return self.ConvertExternalData(
-                request=request, voltage=Voltage, ReturnFloat=ReturnFloat
-            )
+            return self.ConvertExternalData(request=request, voltage=Voltage, ReturnFloat=ReturnFloat)
 
         except Exception as e1:
             self.LogErrorLine("Error in CheckExternalCTData: " + str(e1))
@@ -3917,9 +3903,7 @@ class Evolution(GeneratorController):
             if "Stopped" in EngineState or "Off" in EngineState or not len(EngineState):
                 return DefaultReturn
 
-            ReturnValue = self.CheckExternalCTData(
-                request="current", ReturnFloat=ReturnFloat
-            )
+            ReturnValue = self.CheckExternalCTData(request="current", ReturnFloat=ReturnFloat)
             if ReturnValue != None:
                 return ReturnValue
 
@@ -3932,12 +3916,12 @@ class Evolution(GeneratorController):
                     CurrentFloat = 0.0
 
                 if self.CurrentDivider == None or self.CurrentDivider <= 0:
-                    Divisor = 0.72  # 0.425    #30.0/67.0  #http://www.webmath.com/equline1.html
+                    Divisor = 1000     # This should be Hall Field Current in mA so divide by 1000 for amps
                 else:
                     Divisor = self.CurrentDivider
 
                 if self.CurrentOffset == None:
-                    CurrentOffset = -211.42  # -323.31     #-1939.0/6.0
+                    CurrentOffset = 0
                 else:
                     CurrentOffset = self.CurrentOffset
 

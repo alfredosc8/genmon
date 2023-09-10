@@ -12,6 +12,14 @@ All notable changes to this project will be documented in this file.
 - Updated jquery to 3.7 (thanks @buschauer)
 - Minor update to mytile.py to improve handling of gauges with values out of range
 - modified gengpio.py add on to optionally support GPIO signaling for out of range CPU temperature 
+- Update for Power Zone 410. 
+- Update for custom controller functionality (logs, identity, register labels)
+- Minor update to myserial.py to improve error handling and recovery
+- Added functionality for custom defined controllers via JSON
+- Minor formatting update to web UI spacing to better accommodate custom controllers
+- Updated alarm code for Evolution 2.0
+- Added genmon.conf entries for using loopback IP address for listen address in server
+- Update to current calculation for liquid cooled Evolution
 
 ## V1.18.17 -2023-04-06
 - Added feature request to allow external temperature sensors to be displayed as gauges
