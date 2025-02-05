@@ -13,10 +13,57 @@
 import os
 import sys
 import time
+import re
+from subprocess import PIPE, Popen
 
-import serial
+try:
+    import serial
+except Exception as e1:
+    managedfile = "/usr/lib/python" + str(sys.version_info.major) + "." + str(sys.version_info.minor) + "/EXTERNALLY-MANAGED"
+    if os.path.isfile(managedfile):
+        print("\n\nYou appear to be running in a managed python environemnt. To run this program see this page: ")
+        print("\n\n  https://github.com/jgyates/genmon/wiki/Appendix-S---Working-in-a-Managed-Python-Environment\n")
+    else:
+        print("\nThe python serial libary is not install. You must run the setup script first.\n")
+        print("\n\n   https://github.com/jgyates/genmon/wiki/3.3--Setup-genmon-software")
+    sys.exit(1)
 
+# ------------ UseLegacySerialName --------------------------------------------
+def UseLegacySerialName():
+    try:
+        model = GetRaspberryPiModel()
 
+        if model == None:
+            return True 
+        
+        PiMajorVersion = re.search(r'\d+', model).group()
+        if int(PiMajorVersion) >= 5:
+            return False
+        return True
+    except Exception as e1:
+        print("Error in UseLegacySerialEnable: " + GetErrorInfo())
+        return False
+# ------------ IsPlatformRaspberryPi -------------------------------------------
+def IsPlatformRaspberryPi():
+    try: 
+        model = GetRaspberryPiModel()
+        if model != None and "raspberry" in model.lower():
+            return True 
+        return False
+    except Exception as e1:
+        print("Error in IsPlatformRaspberryPi: " + GetErrorInfo())
+        return False
+# ------------ GetRaspberryPiModel ---------------------------------------------
+def GetRaspberryPiModel():
+    try:    
+        process = Popen(["cat", "/proc/device-tree/model"], stdout=PIPE)
+        output, _error = process.communicate()
+        if sys.version_info[0] >= 3:
+            output = output.decode("utf-8")
+        return str(output.rstrip("\x00"))
+    except Exception as e1:
+        return None
+    
 # ------------ VersionTuple -----------------------------------------------------
 def VersionTuple(value):
 
@@ -95,7 +142,13 @@ def GetErrorInfo():
 # ------------------- Command-line interface for monitor ------------------------
 if __name__ == "__main__":  # usage SerialTest.py [port]
 
-    device = "/dev/serial0" if len(sys.argv) < 2 else sys.argv[1]
+    
+    if UseLegacySerialName():
+        defaultDevice = "/dev/serial0" 
+    else:
+        defaultDevice = "/dev/ttyAMA0" 
+
+    device = defaultDevice if len(sys.argv) < 2 else sys.argv[1]
 
     baudrate = 9600
 

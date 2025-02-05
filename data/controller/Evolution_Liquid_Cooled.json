@@ -1,12 +1,12 @@
 {
-    "controller_name": "Evolution Liquid Cooled",
+    "controller_name": "Evolution Liquid Cooled (Custom Controller)",
     "rated_max_output_power_kw": "48",
     "rated_nominal_voltage": 240,
     "rated_nominal_rpm" : 1800,
     "rated_nominal_freq" : 60,
     "nominal_battery_voltage" : 12,
     "generator_phase": 1,
-    "base_registers": {
+    "holding_registers": {
         "0001": {"length": 2, "text": "Status"},
         "0002": {"length": 2, "text": "Alarm"},
         "0007": {"length": 2, "text": "RPM"},
@@ -33,6 +33,7 @@
         "0053": {"length": 2, "text": "Digital Outputs"},
         "005d": {"length": 2, "text": "Tank Fuel Level"},
         "0054": {"length": 2, "text": "Hours of Protection"},
+        "0058": {"length": 2, "text": "Hall Effect Sensor"},
         "005e": {"length": 4, "text": "Total Run Hours"},
         "0208": {"length": 2, "text": "Generator Calibrate Volts"},
         "0209": {"length": 2, "text": "Utility Calibrate Volts"},
@@ -58,9 +59,17 @@
         "01f4": {"length": 10, "text": "Serial Number"}
     },
     "log_registers": {
-      "03e8": {"length": 10, "text": "Alarm Log", "iteration": 50, "step": 5},
-      "04e2": {"length": 8, "text": "Service Log", "iteration": 50, "step": 4},
-      "012c": {"length": 8, "text": "Run Log", "iteration": 50, "step": 4}
+      "03e8": { 
+                "comment": "The registers in this instance is 03e8. By default, this is read from holding registers.",
+                "comment2:": " To read from input registers add the field 'reg_type': 'input'",
+                "reg_type": "holding",
+                "length": 10, 
+                "text": "Alarm Log", 
+                "iteration": 50, 
+                "step": 5
+              },
+      "04e2": {"reg_type": "holding", "length": 8, "text": "Service Log", "iteration": 50, "step": 4},
+      "012c": {"reg_type": "holding", "length": 8, "text": "Run Log", "iteration": 50, "step": 4}
     },
     "switch_state": [
       {
@@ -538,7 +547,7 @@
             "mask": "ffff",
             "multiplier": 1,
             "type": "int",
-            "title": "Warm Up Time",
+            "title": "Warm Up Delay",
             "units": "seconds"
           },
           {
@@ -1217,32 +1226,109 @@
                                ]
       },
       {
-          "onewordcommand" : "manual",
-          "title" : "Select Manual Mode",
-          "command_sequence" : [
-                                 {
-                                   "reg": "0003",
-                                   "value": "000e"
-                                 }
-                               ]
+        "onewordcommand" : "manual",
+        "title" : "Select Manual Mode",
+        "command_sequence" : [
+                               {
+                                 "reg": "0003",
+                                 "value": "000e"
+                               }
+                             ]
+      },
+      {
+        "onewordcommand" : "resetmaintwarn",
+        "title" : "Reset Maintenance Warnings",
+        "command_sequence" : [
+                               {
+                                 "reg": "0003",
+                                 "value": "0008"
+                               }
+                             ]
+      },
+      {
+        "onewordcommand" : "resetmaintperiods",
+        "title" : "Reset Maintenance Periods",
+        "command_sequence" : [
+                               {
+                                 "reg": "0003",
+                                 "value": "0009"
+                               }
+                             ]
       },
       {
         "onewordcommand" : "exerciseduration",
         "title" : "Exercise Duration",
-        "comment": "The 'command_sequence can be one or more commands",
+        "comment": "The command_sequence can be one or more commands",
         "command_sequence" : [
                                {
-                                  "comment": "the value written to 'reg' is supplied by the user. 'input_title' is required. 'length' (number of mobus bytes to write) is 2 by default,but must be a multiple of 2",
-                                  "comment2": "'bounds_reg' is optional but allows the user interface to bounds check the data before sending it to genmon",
-                                  "comment3": "'tooltip' is optional but allows the user interface to display more information regarding the input.",
+                                  "comment": "'reg' is the modbus register and is required. The value written to the register is supplied by the user." ,
+                                  "comment2": "'input_title' is required. 'length' (number of modbus bytes to write) is 2 by default,but must be 2 or 4 if supplied.",
+                                  "comment3": "'bounds_reg' is optional but allows the user interface to bounds check the data before sending it to genmon (highly recommended)",
+                                  "comment4": "'tooltip' is optional but allows the user interface to display more information regarding the input.",
                                   "reg": "023e",
                                   "input_title": "Minutes",
                                   "type": "int",
                                   "length": 2,
-                                  "bounds_regex":"^([1][2-9])|([2-5][0-9])|([6][0])$",
-                                  "toottip": "The duration of the exercise cycle. This must be a whole number between 12 and 60 minutes."
+                                  "bounds_regex":"^(?:([1][2-9])|([2-5][0-9])|([6][0]))$",
+                                  "tooltip": "The duration of the exercise cycle. This must be a whole number between 12 and 60 minutes."
                                }
                              ]
+    },
+    {
+      "onewordcommand" : "startupdelay",
+      "title" : "Start Up Delay",
+      "command_sequence" : [
+                             {
+                                "reg": "0239",
+                                "input_title": "Seconds",
+                                "type": "int",
+                                "length": 2,
+                                "bounds_regex":"([5-9]|[1-9][0-9]{1,2}|1[0-4][0-9]{2}|1500)$",
+                                "tooltip": "The delay between the loss of utility power and the cranking of the generator. This must be a whole number between 5 and 1500 seconds."
+                             }
+                           ]
+    },
+    {
+      "onewordcommand" : "warmupdelay",
+      "title" : "Warm Up Delay",
+      "command_sequence" : [
+                             {
+                                "reg": "0238",
+                                "input_title": "Seconds",
+                                "type": "int",
+                                "length": 2,
+                                "bounds_regex":"^([2-9]|[1-9][0-9]{1,2}|1[0-4][0-9]{2}|1500)$",
+                                "tooltip": "The delay between the start of the generator and the activation of the transfer switch when utility power has been lost. This must be a whole number between 2 and 1500 seconds."
+                             }
+                           ]
+    },
+    {
+      "onewordcommand" : "thresholdvolts",
+      "title" : "Threshold Volts",
+      "command_sequence" : [
+                             {
+                                "reg": "0011",
+                                "input_title": "Volts",
+                                "type": "int",
+                                "length": 2,
+                                "bounds_regex":"^([0-9]|[1-9][0-9]|[12][0-9]{2}|3[0-3][0-9]|34[0-2])$",
+                                "tooltip": "The utility voltage that denotes an outage. Any utility voltage below this value will trigger the generator to start (After the Start Delay has expired). This must be a whole number between 0 and 342."
+                             }
+                           ]
+    },
+    {
+      "onewordcommand" : "pickupvolts",
+      "title" : "Pickup Volts",
+      "command_sequence" : [
+                             {
+                                "reg": "023b",
+                                "input_title": "Volts",
+                                "type": "int",
+                                "length": 2,
+                                "bounds_regex":"^(17[5-9]|1[89][0-9]|2[0-9]{2}|3[0-3][0-9]|34[0-2])$",
+                                "tooltip": "The utility voltage that denotes an outage is over.. This must be a whole number between 175 and 342."
+                             }
+                           ]
     }
     ],
     "fuel": {
@@ -1300,6 +1386,7 @@
           "units": "h"
       },
       "datetime": {
+        "comment": "This entry is for displaying the time in a format similar to how genmon displays the system time of the system running genmon.",
         "type" : "list",
         "format": "%s %s %s, 20%s %s:%s",
         "title" : "Generator Time",
@@ -1371,6 +1458,36 @@
             }
           ]
         },
+      "settime":{
+        "comment": "the settime object, if present can enable writing of the date and time to the controller",
+        "comment2": "the 'command_sequence' list is required. It defines the registers and what to write to each register",
+        "comment3": "The hour,minute,month,date,year entries are like the 'exec' entries in that they are python code that",
+        "comment4": "format the date and time input into the formate expected in the modbus register.",
+        "comment5": "If multiple entries are in one register command object, the values will be logical OR'ed to create a single value",
+        "command_sequence": [
+          {
+            "reg": "0010",
+            "comment": "This will take a four digit year and only use the lower two digits as low byte",
+            "year":"exec_out = abs({} - 2000)"
+          },
+          {
+            "reg": "000f",
+            "comment": "This will write the day of the month to the lower byte and the month to the upper byte",
+            "comment2": "The 'day' and 'month' will be OR'ed together to create one value to write to the register",
+            "comment3": "months s 1-12, day is 1 - 31",
+            "day": "exec_out = {} & 0x00ff",
+            "month":"exec_out = ({} << 8) & 0xff00"
+          },
+          {
+            "reg":"000e",
+            "comment": "This will write the hours to the upper byte and minutes to the lower byte.",
+            "comment1": "The 'hour' and 'minute' will be OR'ed together to create one value to write to the register",
+            "comment2": "hours is 0 - 23, minutes is 0 - 59",
+            "minute": "exec_out = {} & 0x00ff",
+            "hour": "exec_out = ({} << 8) & 0xff00"
+          }
+        ]
+      },
       "maintenance_due": [
         {
           "comment": "This should only return a value if maintenance is due, otherwise evaluate to nothing.",

@@ -69,7 +69,7 @@ def signal_handler(signal, frame):
         GenNotify.Close()
         Queue.Close()
     except Exception as e1:
-        log.error("signal_handler: " + str(e1))
+        log.error("signal_handler: " + str(e1) + ": " + GetErrorLine())
     sys.exit(0)
 
 
@@ -233,6 +233,10 @@ def SendNotice(Message, **kwargs):
 
         user = app.get_user(userid)
 
+        if user == None:
+            log.error("Unable to get user context")
+            return False
+        
         if not user.is_authenticated:
             log.error("Unable to authenticate user ID")
             return False

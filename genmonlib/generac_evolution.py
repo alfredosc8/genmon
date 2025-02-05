@@ -115,6 +115,7 @@ class Evolution(GeneratorController):
         self.AdditionalRunHours = None
         self.NominalLineVolts = 240
         self.CheckFirmwareVerionsTime = datetime.datetime.now()  # used for com metrics
+        self.FuelDataFromFile = None
 
         self.DaysOfWeek = {
             0: "Sunday",  # decode for register values with day of week
@@ -215,7 +216,7 @@ class Evolution(GeneratorController):
             "005d": [2, 0],  #
             # Total engine time in minutes  (EvoLC) 005e= high, 005f=low
             "005e": [4, 0],  #
-            "003c": [2, 0],  # Raw RPM Sensor Data (Hall Sensor)
+            "003c": [2, 0],  # Raw RPM Sensor Data (RPM * 10 on AC units)
             "05fa": [2, 0],  # Evo AC   (Status?)
             "0033": [2, 0],  # Evo AC   (Status?)
             "0034": [2, 0],  # Evo AC   (Status?) 
@@ -238,13 +239,14 @@ class Evolution(GeneratorController):
             "0235": [2, 0],  # Gain (EvoLC)
             "0236": [2, 0],  # Two Wire Start (EvoAC)
             "0237": [2, 0],  # Set Voltage (Evo LC)
+            "0238": [2, 0],  # Warm up delay (EvoLC)
             "0239": [2, 0],  # Startup Delay (Evo LC)
             "023b": [2, 0],  # Pick Up Voltage (Evo LC only)
             "023e": [2, 0],  # Exercise time duration (Evo LC only)
+            "023f": [2, 0],  # Preheat time (5-30 seconds) Evo LC Diesel only (Evo LC only)
             "0209": [2, 0],  #  Unknown (EvoLC)
             "020d": [2, 0],  #  Unknown (EvoLC)
             "020f": [2, 0],  #  Unknown (EvoLC)  Something in EvoLC
-            "0238": [2, 0],  #  Unknown (EvoLC)
             "023a": [2, 0],  #  Unknown (EvoLC)
             "023d": [2, 0],  #  Unknown (EvoLC)
             "0241": [2, 0],  #  Unknown (EvoLC)
@@ -276,6 +278,10 @@ class Evolution(GeneratorController):
             # Evo LC Output relay status register (battery charging, 
             # transfer switch, Change at startup and stop
             "000d": [2, 0],  # Bit changes when the controller is updating registers.
+              # D0 controller powered up
+              # D1  time or date has changed
+              # D2 exercise changed
+            "0018": [2, 0],  # Failed to exercise bit D0, cleared when read
             "0053": [2, 0],  # Evo LC outputs status register (sensors)
             "0052": [2, 0],  # Evo LC Inputs
             "0009": [2, 0],  # Utility voltage
@@ -417,7 +423,7 @@ class Evolution(GeneratorController):
                 )
                 self.TileList.append(Tile)
 
-                if not self.PreNexus:
+                if not self.PreNexus and not self.PowerPact:
                     Tile = MyTile(
                         self.log,
                         title="Output Voltage",
@@ -461,6 +467,31 @@ class Evolution(GeneratorController):
                     callbackparameters=(True,),
                 )
                 self.TileList.append(Tile)
+
+                if self.EvolutionController and not self.LiquidCooled and not self.bDisablePowerLog and not self.PowerPact:
+                    NominalLegCurrent = ((float(self.NominalKW) * 1000) / 2 ) / (self.NominalLineVolts / 2)
+                    # Setup gauges for EvoAC internal CTs
+                    Tile = MyTile(
+                        self.log,
+                        title="Current L1",
+                        units="A",
+                        type="current",
+                        nominal=int(NominalLegCurrent),
+                        callback=self.GetCurrentOutput,
+                        callbackparameters=(True, False, "ct1"),
+                    )
+                    self.TileList.append(Tile)
+
+                    Tile = MyTile(
+                        self.log,
+                        title="Current L2",
+                        units="A",
+                        type="current",
+                        nominal=int(NominalLegCurrent),
+                        callback=self.GetCurrentOutput,
+                        callbackparameters=(True, False, "ct2"),
+                    )
+                    self.TileList.append(Tile)
 
                 if self.PowerMeterIsSupported():
                     Tile = MyTile(
@@ -648,7 +679,9 @@ class Evolution(GeneratorController):
                     if self.FuelType == "Gasoline":
                         return None
                     if self.EvolutionController:
-                        return self.GetFuelParamsFromFile()
+                        if self.FuelDataFromFile == None:
+                            self.FuelDataFromFile = self.GetFuelParamsFromFile()
+                        return self.FuelDataFromFile
                     return None
 
                 return [
@@ -706,6 +739,7 @@ class Evolution(GeneratorController):
                         ReturnPoints.append(float(Item[8]))  # 100%
                         ReturnPoints.append(float(Item[9]))  # 100% Rate
                         ReturnPoints.append(Item[10])  # Units
+                        self.LogDebug("Fuel Data Points: " + str(ReturnPoints))
                         return ReturnPoints
                     except Exception as e1:
                         self.LogErrorLine(
@@ -730,6 +764,7 @@ class Evolution(GeneratorController):
                         ReturnPoints.append(float(Item[6]))  # 100%
                         ReturnPoints.append(float(Item[7]))  # 100% Rate
                         ReturnPoints.append(Item[8])  # Units
+                        self.LogDebug("Fuel Data Points: " + str(ReturnPoints))
                         return ReturnPoints
                     except Exception as e1:
                         self.LogErrorLine(
@@ -861,52 +896,83 @@ class Evolution(GeneratorController):
             3: ["15KW", "60", "120/240", "1", "992 cc", "240"],
             4: ["20KW", "60", "120/240", "1", "999 cc", "240"],
         }
-        # This should cover the guardian line
-        ModelLookUp_EvoAC = {  # ID : [KW or KVA Rating, Hz Rating, Voltage Rating, Phase, Engine Displacement Nominal Line Voltage ]
-            1: ["9KW", "60", "120/240", "1", "426 cc", "240"],
-            2: ["14KW", "60", "120/240", "1", "992 cc", "240"],
-            3: ["17KW", "60", "120/240", "1", "992 cc", "240"],
-            4: ["20KW", "60", "120/240", "1", "999 cc", "240"],
-            5: ["8KW", "60", "120/240", "1", "410 cc", "240"],
-            7: ["13KW", "60", "120/240", "1", "992 cc", "240"],
-            8: ["15KW", "60", "120/240", "1", "999 cc", "240"],
-            9: ["16KW", "60", "120/240", "1", "999 cc", "240"],
+        ModelLookup_PowerPact = {
+            22: ["7.5KW", "60", "240", "1", "420 cc", "240"],  # Power Pact
+            23: ["5.6KW", "50", "220", "1", "420 cc", "220"],  # Power Pact 50Hz
+        }
+        ModelLookUp_EvoAC_Synergy = { 
             # Variable Speed Constant Frequency
             10: ["20KW","VSCF","120/240","1","999 cc","240",],
-             # Eco Variable Speed Constant Frequency
+             # EcoGen Variable Speed Constant Frequency
             11: ["15KW","ECOVSCF","120/240","1","999 cc","240",],
+         }
+        # This should cover the guardian line
+        ModelLookUp_EvoAC = {  # ID : [KW or KVA Rating, Hz Rating, Voltage Rating, Phase, Engine Displacement Nominal Line Voltage ]
+            1: ["10KW", "60", "120/240", "1", "426 cc", "240"],     #
+            2: ["14KW", "60", "120/240", "1", "992 cc", "240"],     #
+            3: ["17KW", "60", "120/240", "1", "992 cc", "240"],     #
+            4: ["20KW", "60", "120/240", "1", "999 cc", "240"],     #
+            5: ["8KW", "60", "120/240", "1", "410 cc", "240"],      #   EcoGen
+            6: ["12KW", "60", "120/240", "1", "992 cc", "240"],     #
+            7: ["13KW", "60", "120/240", "1", "992 cc", "240"],     #
+            8: ["15KW", "60", "120/240", "1", "999 cc", "240"],     #
+            9: ["16KW", "60", "120/240", "1", "999 cc", "240"],     #
             # 3 distinct models 220, 230, 240
-            12: ["8KVA","50","220,230,240","1","530 cc","240",], 
+            12: ["8KVA","50","220,230,240","1","530 cc","240",],    #
             # 3 distinct models 220, 230, 240
-            13: ["10KVA","50","220,230,240","1","992 cc","240",],  
+            13: ["10KVA","50","220,230,240","1","992 cc","240",],   #
             # 3 distinct models 220, 230, 240
-            14: ["13KVA","50","220,230,240","1","992 cc","240",],
-            15: ["11KW", "60", "240", "1", "530 cc", "240"],
-            17: ["22KW", "60", "120/240", "1", "999 cc", "240"],
-            21: ["11KW", "60", "240 LS", "1", "530 cc", "240"],
-            22: ["7.5KW", "60", "240", "1", "420 cc", "240"],  # Power Pact
-            32: ["20KW", "60", "208 3 Phase", "3", "999 cc", "208"],  # Trinity G007077
-            33: ["Trinity", "50", "380,400,416", "3", None, "380"],  # Discontinued
+            14: ["13KVA","50","220,230,240","1","992 cc","240",],   #
+            15: ["11KW", "60", "240", "1", "530 cc", "240"],        #
+            17: ["22KW", "60", "120/240", "1", "999 cc", "240"],    #
+            21: ["24KW", "60", "120/240", "1", "999 cc", "240"],    #
+            10: ["20KW", "60", "208 3 Phase", "3", "999 cc", "208"],  # Trinity G007077
+            11: ["Trinity", "50", "380,400,416", "3", None, "380"],  # Discontinued
         }
 
-        if self.Evolution2:
-            # Evo G0072100 Evo2 24kw
-            ModelLookUp_EvoAC[8] = ["24KW","60","120/240","1","999 cc","240",] 
+
+        ModelLookUp_EvoAC2 = {
+            1: ["9KW", "60", "120/240", "1", "426 cc", "240"],      #
+            4: ["20KW", "60", "120/240", "1", "999 cc", "240"],     #
+            2: ["20KW", "60", "120/240", "1", "999 cc", "240"],     # 22kW-315 (Demand Response?)
+            11: ["15KW","60","120/240","1","999 cc","240",],        # EcoGen ECOVSCF not 60
+            5: ["10KW", "60", "120/240", "1", "426 cc", "240"],     #
+            15: ["11KW", "60", "240", "1", "530 cc", "240"],        #
+            7: ["13KW", "60", "120/240", "1", "992 cc", "240"],     #
+            # Evo G00704311 Evo2 22kw
+            8: ["22KW","60","120/240","1","999 cc","240",],         # 22kW-315 (Demand Response?)
+            9: ["16KW", "60", "120/240", "1", "999 cc", "240"],     #
             # Evo2 22kW Home Guardian
-            ModelLookUp_EvoAC[17] = ["22KW","60","120/240","1","999 cc","240",]  
+            17: ["22KW","60","120/240","1","999 cc","240",],        #
             # Evo2 Generac Guardian 18kW G007226-0,
-            ModelLookUp_EvoAC[18] = ["18KW","60","120/240","1","816 cc","240",]
+            18: ["18KW","60","120/240","1","816 cc","240",],        #
             # Evo G0072100 Evo2 24kw
-            ModelLookUp_EvoAC[21] = ["24KW","60","120/240","1","999 cc","240",]
+            21: ["24KW","60","120/240","1","999 cc","240",],        #
+            # Evo2 G0072900
+            24: ["26KW","60","120/240","1","999 cc","240",],
             # Evo G0071760
-            ModelLookUp_EvoAC[22] = ["16KW","60","120/240","1","816 cc","240",]
+            22: ["16KW","60","120/240","1","816 cc","240",],        # 16kW FS
             # Evo2 G0072230
-            ModelLookUp_EvoAC[23] = ["14KW","60","120/240","1","816 cc","240",]
+            23: ["14KW","60","120/240","1","816 cc","240",],        #
+            10: ["20KW", "60", "208 3 Phase", "3", "999 cc", "208"], # Trinity G007077
             # 3 phase export
-            ModelLookUp_EvoAC[11] = ["20KW","50","208 3 Phase","3","999 cc","208",]
+            11: ["20KW","50","208 3 Phase","3","999 cc","208",],    #
+            # 3 distinct models 220, 230, 240
+            12: ["8KVA","50","220,230,240","1","530 cc","240",],    #
+            # 3 distinct models 220, 230, 240
+            13: ["10KVA","50","220,230,240","1","992 cc","240",],   #
+            # 3 distinct models 220, 230, 240
+            14: ["13KVA","50","220,230,240","1","992 cc","240",],   #
+        }
 
         LookUp = None
-        if self.EvolutionController:
+        if self.Evolution2:
+            LookUp = ModelLookUp_EvoAC2
+        elif self.PowerPact:
+            LookUp = ModelLookup_PowerPact
+        elif self.SynergyController:
+            LookUp = ModelLookUp_EvoAC_Synergy
+        elif self.EvolutionController:
             LookUp = ModelLookUp_EvoAC
         else:
             LookUp = ModelLookUp_NexusAC
@@ -1007,6 +1073,7 @@ class Evolution(GeneratorController):
                 return False, ReturnModel, ReturnKW
 
             try:
+                myresponse1 = ""
                 if sys.version_info[0] < 3:
                     data1 = r1.read()  # Python 2.x
                 else:
@@ -1029,7 +1096,7 @@ class Evolution(GeneratorController):
 
             except Exception as e1:
                 self.LogErrorLine("Error in LookUpSNInfo (parse request 1): " + str(e1))
-                self.LogError(str(myresponse1))
+                self.LogError("Response: " + str(myresponse1))
                 conn.close()
                 return False, ReturnModel, ReturnKW
 
@@ -1135,13 +1202,14 @@ class Evolution(GeneratorController):
         if len(Value) != 4:
             return ""
         ProductModel = int(Value, 16)
+        # 0x01  R200
         # 0x02  Pre-Nexus
-        # 0x03  Nexus, Air Cooled
-        # 0x06  Nexus, Liquid Cooled
-        # 0x09  Evolution, Air Cooled
+        # 0x03, 0x4, 0x5  Nexus, Air Cooled
+        # 0x06, 0x7, 0x8  Nexus, Liquid Cooled
+        # 0x09, 0x0b  Evolution, Air Cooled
         # 0x0a  Evolution Synergy, Air Cooled
         # 0x0c  Evolution, Liquid Cooled
-        # 0x12  Evolution Power Pact, Air Cooled
+        # 0x12,0x13 or 0x14  Evolution Power Pact, Air Cooled
         # 0x15  Evolution 2.0, Air Cooled
         # 0x16  Evolution 4.5L, Liquid Cooled
 
@@ -1161,7 +1229,7 @@ class Evolution(GeneratorController):
             if ProductModel == 0x15:
                 self.Evolution2 = True
 
-            if ProductModel == 0x12:
+            if ProductModel == 0x12 or ProductModel == 0x13 or ProductModel == 0x14:
                 self.PowerPact = True
 
             if ProductModel == 0x02:
@@ -1173,7 +1241,7 @@ class Evolution(GeneratorController):
             # if reg 000 is 3 or less then assume we have a Nexus Controller
             if ProductModel == 0x03 or ProductModel == 0x06 or ProductModel == 0x02:
                 self.EvolutionController = False  # "Nexus"
-            elif (ProductModel in [0x09, 0x0C, 0x0A,0x12, 0x15, 0x16]):
+            elif (ProductModel in [0x09, 0x0b, 0x0C, 0x0A, 0x12, 0x13, 0x14, 0x15, 0x16]):
                 self.EvolutionController = True  # "Evolution"
             else:
                 # set a reasonable default
@@ -1186,6 +1254,9 @@ class Evolution(GeneratorController):
                     "Warning in DetectController (Nexus / Evolution):  Unverified value detected in model register (%04x)"
                     % ProductModel
                 )
+
+                msgbody += "\nIP Address: " + self.GetNetworkIp()
+
                 self.MessagePipe.SendMessage(
                     "Generator Monitor (Nexus / Evolution): Warning at "
                     + self.SiteName,
@@ -1200,15 +1271,10 @@ class Evolution(GeneratorController):
 
         if self.LiquidCooled == None:
             if (
-                ProductModel == 0x03
-                or ProductModel == 0x09
-                or ProductModel == 0x0A
-                or ProductModel == 0x15
-                or ProductModel == 0x12
-                or ProductModel == 0x02
+                ProductModel in [0x02, 0x03, 0x04, 0x05, 0x09, 0x0A, 0x0B, 0x12, 0x13, 0x04, 0x15]
             ):
                 self.LiquidCooled = False  # Air Cooled
-            elif ProductModel == 0x06 or ProductModel == 0x0C or ProductModel == 0x16:
+            elif ProductModel in [0x06, 0x0C, 0x16]:
                 self.LiquidCooled = True  # Liquid Cooled
             else:
                 # set a reasonable default
@@ -1217,6 +1283,8 @@ class Evolution(GeneratorController):
                     "Warning in DetectController (liquid / air cooled):  Unverified value detected in model register (%04x)"
                     % ProductModel
                 )
+                msgbody += "\nIP Address: " + self.GetNetworkIp()
+
                 self.MessagePipe.SendMessage(
                     "Generator Monitor (liquid / air cooled: Warning at "
                     + self.SiteName,
@@ -1224,21 +1292,17 @@ class Evolution(GeneratorController):
                     msgtype="error",
                 )
         else:
-            self.LogError(
-                "DetectController auto-detect override (Liquid Cooled). Liquid Cooled now is %s"
-                % str(self.LiquidCooled)
-            )
+            self.LogError("DetectController auto-detect override (Liquid Cooled). Liquid Cooled now is %s"% str(self.LiquidCooled))
 
-        if (
-            not self.EvolutionController
-        ):  # if we are using a Nexus Controller, force legacy writes
+        if not self.EvolutionController:  # if we are using a Nexus Controller, force legacy writes
             self.bUseLegacyWrite = True
 
+        if not self.bEnhancedExerciseFrequency:
+            if self.Evolution2 or self.PowerPact or self.SynergyController:
+                self.bEnhancedExerciseFrequency = True
         if UnknownController:
             msg = "Unknown Controller Found: %x" % ProductModel
-            self.FeedbackPipe.SendFeedback(
-                "UnknownController", Message=msg, FullLogs=True
-            )
+            self.FeedbackPipe.SendFeedback("UnknownController", Message=msg, FullLogs=True)
         return "OK"
 
     # ----------  ControllerGetController  --------------------------------------
@@ -1251,15 +1315,21 @@ class Evolution(GeneratorController):
             ControllerDecoder = {
                 0x02: "Pre-Nexus, Air Cooled",
                 0x03: "Nexus, Air Cooled",
+                0x04: "Nexus, Air Cooled (4)",
+                0x05: "Nexus, Air Cooled (5)",
                 0x06: "Nexus, Liquid Cooled",
+                0x07: "Nexus, Liquid Cooled (7)",
+                0x08: "Nexus, Liquid Cooled (8)",
                 0x09: "Evolution, Air Cooled",
                 0x0A: "Synergy Evolution, Air Cooled",
+                0x0B: "Evolution, Air Cooled (11)",
                 0x0C: "Evolution, Liquid Cooled",
                 0x12: "Power Pact Evolution, Air Cooled",
+                0x13: "Power Pact Evolution, Air Cooled (19)",
+                0x14: "Power Pact Evolution, Air Cooled (20)",
                 0x15: "Evolution 2.0, Air Cooled",
                 0x16: "Evolution 4.5L, Liquid Cooled",
             }
-
             Value = self.GetRegisterValueFromList("0000")
             if len(Value) != 4:
                 return ""
@@ -1547,55 +1617,6 @@ class Evolution(GeneratorController):
                 "Monitor Register Alert: " + Register, msgbody, msgtype="warn"
             )
 
-    # ----------  Evolution:CalculateExerciseTime--------------------------------
-    # helper routine for AltSetGeneratorExerciseTime
-    def CalculateExerciseTime(self, MinutesFromNow):
-
-        ReturnedValue = 0x00
-        Remainder = MinutesFromNow
-        # convert minutes from now to weighted bit value
-        if Remainder >= 8738:
-            ReturnedValue |= 0x1000
-            Remainder -= 8738
-        if Remainder >= 4369:
-            ReturnedValue |= 0x0800
-            Remainder -= 4369
-        if Remainder >= 2184:
-            ReturnedValue |= 0x0400
-            Remainder -= 2185
-        if Remainder >= 1092:
-            ReturnedValue |= 0x0200
-            Remainder -= 1092
-        if Remainder >= 546:
-            ReturnedValue |= 0x0100
-            Remainder -= 546
-        if Remainder >= 273:
-            ReturnedValue |= 0x0080
-            Remainder -= 273
-        if Remainder >= 136:
-            ReturnedValue |= 0x0040
-            Remainder -= 137
-        if Remainder >= 68:
-            ReturnedValue |= 0x0020
-            Remainder -= 68
-        if Remainder >= 34:
-            ReturnedValue |= 0x0010
-            Remainder -= 34
-        if Remainder >= 17:
-            ReturnedValue |= 0x0008
-            Remainder -= 17
-        if Remainder >= 8:
-            ReturnedValue |= 0x0004
-            Remainder -= 8
-        if Remainder >= 4:
-            ReturnedValue |= 0x0002
-            Remainder -= 4
-        if Remainder >= 2:
-            ReturnedValue |= 0x0001
-            Remainder -= 2
-
-        return ReturnedValue
-
     # ----------  Evolution:AltSetGeneratorExerciseTime--------------------------
     # Note: This method is a bit odd but it is how ML does it. It can result in being off by
     # a min or two
@@ -1660,7 +1681,8 @@ class Evolution(GeneratorController):
         total_delta_min = self.GetDeltaTimeMinutes(DeltaTime)
 
         # Hour 0 - 23,  Min 0 - 59
-        WriteValue = self.CalculateExerciseTime(total_delta_min)
+        SecondsFromNow = total_delta_min*60
+        WriteValue = (int(SecondsFromNow / 128))
 
         self.WriteIndexedRegister(0x0006, WriteValue)
 
@@ -1669,10 +1691,18 @@ class Evolution(GeneratorController):
     # ----------  Evolution:SetGeneratorExerciseTime-----------------------------
     def SetGeneratorExerciseTime(self, CmdString):
 
+        if not self.bUseLegacyWrite and self.EvolutionController and not self.Evolution2:
+            # set legacy write for Evo1 with Firmware lower than V1.10
+            FWVersion = self.GetFirmwareVersion()
+            self.LogDebug("Check Legacy Write: %s" % FWVersion)
+            if len(FWVersion) and (self.VersionTuple(FWVersion) < (1, 10)):
+                self.LogDebug("Firmware version %s, setting legacy write" % FWVersion)
+                self.bUseLegacyWrite = True
+
         # use older style write to set exercise time if this flag is set
         if self.bUseLegacyWrite:
             return self.AltSetGeneratorExerciseTime(CmdString)
-
+        
         # extract time of day and day of week from command string
         # format is day:hour:min  Monday:15:00
         msgbody = "Invalid command syntax for command setexercise"
@@ -2080,8 +2110,37 @@ class Evolution(GeneratorController):
             return True
         return False
 
+    # ------------ Evolution:CheckResetableBits --------------------------------
+    def CheckResetableBits(self, Register, Value, OldValule = ""):
+
+        try:
+            if Register != "000d" and Register != "0018":
+                return
+            
+            try:
+                IntRegValue = int(Value, 16)
+            except:
+                return
+            if Register == "000d":
+                # D0 controller powered up
+                if IntRegValue & 0x01:
+                    self.LogDebug("Controller Powered Up")
+                # D1  time or date has changed
+                if IntRegValue & 0x02:
+                    self.LogDebug("Time Changed")
+                # D2 exercise changed
+                if IntRegValue & 0x04:
+                    self.LogDebug("Exercise Changed")
+
+            elif Register == "0018":
+                # Failed to exercise bit D0, cleared when read
+                if IntRegValue & 0x01:
+                    self.LogDebug("Failed to Exercise")
+        except Exception as e1:
+            self.LogErrorLine("Error in CheckResetableBits: " + str(e1))
+
     # ------------ Evolution:UpdateRegisterList ---------------------------------
-    def UpdateRegisterList(self, Register, Value, IsString=False, IsFile=False):
+    def UpdateRegisterList(self, Register, Value, IsString=False, IsFile=False, IsCoil = False, IsInput = False):
 
         if IsString:
             self.LogError("Validation Error: IsString is True")
@@ -2098,20 +2157,22 @@ class Evolution(GeneratorController):
             return False
         if not self.ValidateRegister(Register, Value):
             return False
-        RegValue = self.Registers.get(Register, "")
+        RegValue = self.Holding.get(Register, "")
 
         if RegValue == "":
-            self.Registers[
+            self.Holding[
                 Register
             ] = Value  # first time seeing this register so add it to the list
         elif RegValue != Value:
             # don't print values of registers we have validated the purpose
             if not self.RegisterIsLog(Register):
                 self.MonitorUnknownRegisters(Register, RegValue, Value)
-            self.Registers[Register] = Value
+            self.Holding[Register] = Value
             self.Changed += 1
         else:
             self.NotChanged += 1
+
+        self.CheckResetableBits(Register, Value, RegValue)
         return True
 
     # ------------ Evolution:RegisterIsKnown ------------------------------------
@@ -2134,7 +2195,7 @@ class Evolution(GeneratorController):
 
             RegList = []
 
-            Regs["Num Regs"] = "%d" % len(self.Registers)
+            Regs["Num Regs"] = "%d" % len(self.Holding)
             if self.NotChanged == 0:
                 self.TotalChanged = 0.0
             else:
@@ -2143,10 +2204,10 @@ class Evolution(GeneratorController):
             Regs["Changed"] = "%d" % self.Changed
             Regs["Total Changed"] = "%.2f" % self.TotalChanged
 
-            Regs["Base Registers"] = RegList
+            Regs["Holding"] = RegList
             # print all the registers
             # make a temp copy in case the registers change whil iterating
-            temp_regsiters = self.Registers
+            temp_regsiters = self.Holding
             for Register, Value in temp_regsiters.items():
 
                 # do not display log registers or model register
@@ -2189,6 +2250,9 @@ class Evolution(GeneratorController):
             if not len(UtilityVoltsStr):
                 return
 
+            if (self.EvolutionController and not self.LiquidCooled) or self.UseExternalCTData:
+                self.CheckLegBalance(self.GetCurrentOutput(ReturnFloat=True, leg = "ct1"), self.GetCurrentOutput(ReturnFloat=True, leg = "ct2"))
+
             UtilityVolts = self.GetUtilityVoltage(ReturnInt=True)
 
             # Get threshold voltage
@@ -2222,6 +2286,8 @@ class Evolution(GeneratorController):
                     if TransferStatus == "Utility":
                         self.TransferActive = False
                         msgbody = "\nPower is being supplied by the utility line. "
+                        msgbody += "\nIP Address: " + self.GetNetworkIp()
+
                         self.MessagePipe.SendMessage(
                             "Transfer Switch Changed State Notice at " + self.SiteName,
                             msgbody,
@@ -2231,6 +2297,8 @@ class Evolution(GeneratorController):
                     if TransferStatus == "Generator":
                         self.TransferActive = True
                         msgbody = "\nPower is being supplied by the generator. "
+                        msgbody += "\nIP Address: " + self.GetNetworkIp()
+                        
                         self.MessagePipe.SendMessage(
                             "Transfer Switch Changed State Notice at " + self.SiteName,
                             msgbody,
@@ -2314,6 +2382,8 @@ class Evolution(GeneratorController):
                 )
             else:
                 msgbody += self.printToString("\nNo Alarms: 0001:%08x" % RegVal)
+            
+            msgbody += "\nIP Address: " + self.GetNetworkIp()
 
             # if option enabled and evo 2.0 detected and result invalid, do not end email.
             sendMessage = True
@@ -2448,43 +2518,44 @@ class Evolution(GeneratorController):
                 except:
                     pass
 
-                if self.EvolutionController and self.LiquidCooled:
-                    # get total hours since activation
-                    ControllerSettings.append(
-                        {
-                            "Hours of Protection": self.ValueOut(
-                                self.GetParameter("0054", ReturnInt=True), "h", JSONNum
-                            )
-                        }
-                    )
-                    ControllerSettings.append(
-                        {
-                            "Volts Per Hertz": self.ValueOut(
-                                self.GetParameter("020e", ReturnInt=True), "", JSONNum
-                            )
-                        }
-                    )
-                    ControllerSettings.append(
-                        {
-                            "Gain": self.ValueOut(
-                                self.GetParameter("0235", ReturnInt=True), "", JSONNum
-                            )
-                        }
-                    )
-                    ControllerSettings.append(
-                        {
-                            "Target Frequency": self.ValueOut(
-                                self.GetParameter("005a", ReturnInt=True), "Hz", JSONNum
-                            )
-                        }
-                    )
-                    ControllerSettings.append(
-                        {
-                            "Target Voltage": self.ValueOut(
-                                self.GetParameter("0059", ReturnInt=True), "V", JSONNum
-                            )
-                        }
-                    )
+            if self.EvolutionController and (self.LiquidCooled or self.Evolution2):
+                # get total hours since activation
+                ControllerSettings.append(
+                    {
+                        "Hours of Protection": self.ValueOut(
+                            self.GetParameter("0054", ReturnInt=True), "h", JSONNum
+                        )
+                    }
+                )
+            if self.EvolutionController and self.LiquidCooled:
+                ControllerSettings.append(
+                    {
+                        "Volts Per Hertz": self.ValueOut(
+                            self.GetParameter("020e", ReturnInt=True), "", JSONNum
+                        )
+                    }
+                )
+                ControllerSettings.append(
+                    {
+                        "Gain": self.ValueOut(
+                            self.GetParameter("0235", ReturnInt=True), "", JSONNum
+                        )
+                    }
+                )
+                ControllerSettings.append(
+                    {
+                        "Target Frequency": self.ValueOut(
+                            self.GetParameter("005a", ReturnInt=True), "Hz", JSONNum
+                        )
+                    }
+                )
+                ControllerSettings.append(
+                    {
+                        "Target Voltage": self.ValueOut(
+                            self.GetParameter("0059", ReturnInt=True), "V", JSONNum
+                        )
+                    }
+                )
 
             if not self.SmartSwitch:
                 Exercise = []
@@ -2617,7 +2688,7 @@ class Evolution(GeneratorController):
         if self.EvolutionController and self.LiquidCooled:
             # get total hours since activation
             Sensors.append(
-                {"Battery Charger Sensor": self.GetParameter("05ee", Divider=100.0)}
+                {"Battery Charger Sensor": self.GetParameter("05ee", Divider=1000.0)}
             )
             Sensors.append(
                 {"Battery Status (Sensor)": self.GetBatteryStatusAlternate()}
@@ -2650,7 +2721,7 @@ class Evolution(GeneratorController):
 
         if self.EvolutionController and self.Evolution2:
             Sensors.append(
-                {"Battery Charger Sensor": self.GetParameter("05ee", Divider=100.0)}
+                {"Battery Charger Sensor": self.GetParameter("05ee", Divider=1000.0)}
             )
             Sensors.append(
                 {"Battery Status (Sensor)": self.GetBatteryStatusAlternate()}
@@ -2903,42 +2974,92 @@ class Evolution(GeneratorController):
         }
 
         AlarmLogDecoder_EvoLC = {
-            0x04: "RPM Sense Loss",  # 1500 Alarm
-            0x06: "Low Coolant Level",  # 2720  Alarm
-            0x47: "Low Fuel Level",  # 2700A Alarm
-            0x1B: "Low Fuel Level",  # 2680W Alarm
-            0x41: "Ignition Fault",  # 2602 Alarm
-            0x46: "Ruptured Tank",  # 2710 Alarm
-            0x49: "Hall Calibration Error"  # 2810  Alarm
-            # Low Oil Pressure
-            # High Engine Temperature
-            # Overcrank
-            # Overspeed
-            # RPM Sensor Loss
-            # Underspeed
-            # Underfrequency
-            # Wiring Error
-            # Undervoltage
-            # Overvoltage
-            # Internal Fault
-            # Firmware Error
-            # Stepper Overcurrent
-            # Fuse Problem
-            # Ruptured Basin
-            # Canbus Error
-            ####Warning Displays
-            # Low Battery
-            # Maintenance Periods
-            # Exercise Error
-            # Battery Problem
-            # Charger Warning
-            # Charger Missing AC
-            # Overload Cooldown
-            # USB Warning
-            # Download Failure
-            # FIRMWARE ERROR-9
+            0x0: "High Temperature",
+            0x1: "Low Oil Pressure",
+            0x2: "Overcrank",
+            0x3: "Overspeed",
+            0x4: "RPM Sense Loss",
+            0x5: "Underspeed",
+            0x6: "Low Coolant Level",
+            0x8: "Wiring Error",
+            0x9: "Over Voltage",
+            0xa: "Under Voltage",
+            0xb: "Overload",
+            0xc: "Undervoltage Overload",
+            0xd: "Stepper Overcurrent",
+            0xe: "Fuse Problem",
+            0xf: "VSCF_COMM_GONE",
+            0x10: "VSCF_ENABLE_MISMATCH",
+            0x11: "VSCF_PWM_SPEED_GONE",
+            0x12: "Very Low Battery",
+            0x13: "VSCF_SPECIAL_NO_TRANSLATION",
+            0x14: "Low Battery",
+            0x15: "Exercise Set Error",
+            0x16: "Service Schedule B",
+            0x17: "Service Schedule A",
+            0x18: "Inspect Battery",
+            0x19: "Service Schedule C",
+            0x1c: "Stopping",
+            0x1d: "Software Error 9",
+            0x1e: "Fuel Pressure",
+            0x1f: "Battery Problem",
+            0x20: "Charger Warning",
+            0x21: "Charger missing AC",
+            0x22: "Overload warning",
+            0x23: "Check Engine",
+            0x24: "DTC Warning",
+            0x25: "VSCF Warning",
+            0x26: "USB Warning",
+            0x27: "Modbus Comms Failure Warning",
+            0x28: "Switched off",
+            0x29: "Running-Manual",
+            0x2a: "Stopped-Auto",
+            0x2b: "Running-Utility Lost",
+            0x2c: "Running-2 Wire Start",
+            0x2d: "Running-Radio Start",
+            0x2e: "Running-Exercise",
+            0x2f: "Stopped-Alarm",
+            0x3c: "Service B performed",
+            0x3d: "Service A performed",
+            0x3e: "Battery Inspected",
+            0x3f: "Reset Maintenance",
+            0x40: "Internal Fault",
+            0x41: "Ignition Fault",
+            0x42: "CANbus Error",
+            0x43: "Missing Cam Pulse",
+            0x44: "Missing Crank Pulse",
+            0x45: "Governor Fault",
+            0x46: "Ruptured Tank",
+            0x47: "Low Fuel",
+            0x48: "E-Stop",
+            0x49: "Hall Calibration Error",
+            0x4a: "SEEProm Abuse",
+            0x4b: "Download Failure",
+            0x4c: "Service C Performed",
+            # Evo4.5L only
+            0xaa: "ECU Fault",
+            0xab: "Engine Throttle Valve 1 Position 1",
+            0xac: "Engine Fuel Delivery Pressure",
+            0xad: "Engine Oil Pressure",
+            0xae: "Engine Intake Manifold #1 Pressure",
+            0xaf: "Engine Intake Manifold 1 Temperature",
+            0xb0: "Engine Air Filter 1 Differential Pressure",
+            0xb1: "Engine Coolant Temperature",
+            0xb2: "Battery Potential / Power Input 1",
+            0xb3: "Engine Oil Temperature 1",
+            0xb4: "Engine Fuel Shutoff 1 Control",
+            0xb5: "Engine Position Sensor",
+            0xb6: "Engine Timing Sensor",
+            0xb7: "O2 Sensor",
+            0xb8: "Engine Knock 1",
+            0xb9: "Engine Ignition Coil #1",
+            0xba: "Engine Ignition Coil #2",
+            0xbb: "Engine Ignition Coil #3",
+            0xbc: "Engine Ignition Coil #4",
+            0xbd: "Engine Fuel Valve 1 Position",
+            0xbe: "Engine Charge Air Cooler 1 Bypass",
+            0xbf: "Engine Speed"
         }
-
         # Evolution Air Cooled Decoder
         # NOTE: Warnings on Evolution Air Cooled have an error code of zero
         AlarmLogDecoder_EvoAC = {
@@ -2950,7 +3071,7 @@ class Evolution(GeneratorController):
             0x17: "Service Schedule A ",
             0x18: "Inspect Battery",
             0x19: "SEEPROM ABUSE",
-            0x1C: "Stopping.....",
+            0x1C: "Stopping",
             0x1D: "FIRMWARE ERROR-9",
             0x1E: "Fuel Pressure",
             0x1F: "Battery Problem",
@@ -2992,7 +3113,7 @@ class Evolution(GeneratorController):
             if len(FWVersion) and (self.VersionTuple(FWVersion) >= (1, 14)):
                 AlarmLogDecoder_EvoAC[0x33] = "No Rotation Warning"
 
-        NexusAlarmLogDecoder = {
+        NexusLCAlarmLogDecoder = {
             0x00: "High Engine Temperature",  # Validated on Nexus Air Cooled
             0x01: "Low Oil Pressure",  # Validated on Nexus Liquid Cooled
             0x02: "Overcrank",  # Validated on Nexus Air Cooled
@@ -3017,8 +3138,40 @@ class Evolution(GeneratorController):
             0x1E: "Low Fuel Pressure",  # Validated on Nexus Liquid Cooled
             0x21: "Service Schedule A",  # Validated on Nexus Liquid Cooled
             0x22: "Service Schedule B",  # Validated on Nexus Liquid Cooled
+            0x23: "Check Engine",        # Validated on Nexus Liquid Cooled
         }
 
+        NexusACAlarmLogDecoder = {
+            0x00: "High Temperature",
+            0x01: "Low Oil Pressure",
+            0x02: "Overcrank",
+            0x03: "Overspeed",
+            0x04: "RPM Sense Loss",
+            0x05: "Underspeed",
+            0x06: "Internal Fault",
+            0x07: "Software Error 7",
+            0x08: "Wiring Error",
+            0x09: "Over Voltage",
+            0x0a: "Under Voltage",
+            0x14: "Low Battery",
+            0x15: "Exercise Set Error",
+            0x16: "Change Oil & Filter",
+            0x17: "Inspect Air Filter",
+            0x18: "Change Air Filter",
+            0x19: "Inspect Spark Plugs",
+            0x1a: "Change Spark Plugs",
+            0x1b: "Inspect Battery",
+            0x1c: "Stopping",
+            0x1d: "Software Error 9",
+            0x27: "Modbus Comms Failure Warning",
+            0x28: "Switched Off",
+            0x29: "Running-manual",
+            0x2a: "Stopped-auto",
+            0x2b: "Running-Utility Lost",
+            0x2c: "Running-2 wire start",
+            0x2d: "Running-radio start",
+            0x2e: "Running-exercise"
+        }
         # Service Schedule log and Start/Stop Log are 16 chars long
         # error log is 20 chars log
         if len(Value) < 16:
@@ -3082,8 +3235,12 @@ class Evolution(GeneratorController):
             DecoderLookup[ALARM_LOG_STARTING_REG] = AlarmLogDecoder_EvoLC
             DecoderLookup[SERVICE_LOG_STARTING_REG] = ServiceLogDecoder
 
+        if not self.EvolutionController and not self.LiquidCooled:
+            DecoderLookup[NEXUS_ALARM_LOG_STARTING_REG] = NexusACAlarmLogDecoder
+        else:
+            DecoderLookup[NEXUS_ALARM_LOG_STARTING_REG] = NexusLCAlarmLogDecoder
+
         DecoderLookup[START_LOG_STARTING_REG] = StartLogDecoder
-        DecoderLookup[NEXUS_ALARM_LOG_STARTING_REG] = NexusAlarmLogDecoder
 
         if LogBase == NEXUS_ALARM_LOG_STARTING_REG and self.EvolutionController:
             self.LogError("Error in ParseLog: Invalid Base Register %X", LogBase)
@@ -3277,6 +3434,7 @@ class Evolution(GeneratorController):
         AlarmValues = {
             0x01: "Low Battery",  #  Validate on Nexus, occurred when Low Battery Alarm
             0x02: "High Temperature",  #  Validaed on EvoAC
+            0x03: "Controller Fault",
             0x05: "Low Fuel Pressure",  #  Validate on Nexus LC
             0x08: "Low Coolant",  #  Validate on Evolution, occurred when forced low coolant
             0x0A: "Low Oil Pressure",  #  Validate on Nexus Air Cooled.
@@ -3285,11 +3443,16 @@ class Evolution(GeneratorController):
             0x0D: "RPM Sense Loss",  #  Validate on Evolution, occurred when forcing RPM sense loss from manual start
             0x0F: "Change Oil & Filter",  #  Validate on Nexus AC
             0x10: "Inspect Air Filter",  #  Validate on Nexus LC
-            0x12: "Check for Service",  #  Validate on Nexus AC (Spark Plugs service due?)
+            0x11: "Change Air Filter",
+            0x12: "Check Spark Plugs",  #  Validate on Nexus AC (Spark Plugs service due?)
+            0x13: "Change Spark Plugs",
             0x14: "Check Battery",  #  Validate on Nexus, occurred when Check Battery Alarm
             0x15: "Underspeed",  #  Validate on Evo AC 2
+            0x16: "Change Coolant",
             0x18: "Wiring Error",  #  Validate on Nexus AC
+            0x19: "Check Engine",       # Validate on Nexus AC
             0x1A: "Missing Cam Pulse",  #  Validate on Nexus Liquid Cooled
+            0x1B: "Missing Crank Pulse",  #  Validate on Nexus Liquid Cooled
             0x1C: "Throttle Failure",  #  Validate on Nexus LC,
             0x1D: "Over Voltage",  #  Validate on Nexus Air Cooled
             0x1E: "Under Voltage",  #  Validate on EvoAC
@@ -3303,11 +3466,23 @@ class Evolution(GeneratorController):
             0x29: "Battery Problem",  #  Validate on EvoLC
             0x2A: "Charger Warning",  #  Validate on EvoAC 2
             0x2B: "Charger Missing AC",  #  Validate on EvoAC, occurred when Charger Missing AC Warning
+            0x2D: "Overload Cooldown",  # Warning
             0x30: "Ruptured Tank",  #  Validate on Evolution, occurred when forced ruptured tank
             0x31: "Low Fuel Level",  #  Validate on Evolution, occurred when Low Fuel Level
             0x32: "Low Fuel Pressure",  #  Validate on EvoLC
             0x34: "Emergency Stop",  #  Validate on Evolution, occurred when E-Stop
             0x38: "Very Low Battery",  #  Validate on Evolutio Air Cooled
+            0x46: "ECU Faulted",                        # Evo4.5L
+            0x47: "Engine Throttle Valve 1 Position 1", # Evo4.5L
+            0x48: "Engine Fuel Delivery Pressure",      # Evo4.5L
+            0x49: "Engine Oil Pressure",                # Evo4.5L
+            0x4a: "Engine Intake Manifold #1 Pressure", # Evo4.5L
+            0x4b: "Engine Intake Manifold 1 Temperature",   # Evo4.5L
+            0x4c: "Engine Air Filter 1 Differential Pressure",  # Evo4.5L
+            0x4d: "Engine Coolant Temperature",         # Evo4.5L
+            0x4e: "Battery Potential / Power Input 1",  # Evo4.5L
+            0x4f: "Engine Oil Temperature 1",           # Evo4.5L
+            0x50: "Engine Fuel Shutoff 1 Control",      # Evo4.5L
             0x72: "No Rotation Warning"   # Evo 2.0  validated
             # 0x74 : "Controller Lost Connection to Server"    # Evolution 2.0 not validated
         }
@@ -3558,32 +3733,36 @@ class Evolution(GeneratorController):
         # Cranking
         # Cranking Warning
         # Cranking Alarm
-        if self.BitIsEqual(RegVal, 0x000F0000, 0x00040000):
+        if self.BitIsEqual(RegVal, 0x001F0000, 0x00040000):
             return "Exercising"
-        elif self.BitIsEqual(RegVal, 0x000F0000, 0x00090000):
+        elif self.BitIsEqual(RegVal, 0x001F0000, 0x00090000):
             return "Stopped"
         # Note: this appears to define the state where the generator should start, it defines
         # the initiation of the start delay timer, This only appears in Nexus and Air Cooled Evo
-        elif self.BitIsEqual(RegVal, 0x000F0000, 0x00010000):
+        elif self.BitIsEqual(RegVal, 0x001F0000, 0x00010000):
             return "Startup Delay Timer Activated"
-        elif self.BitIsEqual(RegVal, 0x000F0000, 0x00020000):
+        elif self.BitIsEqual(RegVal, 0x001F0000, 0x00020000):
             if self.SystemInAlarm():
                 return "Cranking in Alarm"
             else:
                 return "Cranking"
-        elif self.BitIsEqual(RegVal, 0x000F0000, 0x00050000):
+        elif self.BitIsEqual(RegVal, 0x001F0000, 0x00050000):
             return "Cooling Down"
-        elif self.BitIsEqual(RegVal, 0x000F0000, 0x00030000):
+        elif self.BitIsEqual(RegVal, 0x001F0000, 0x00030000):
             if self.SystemInAlarm():
                 return "Running in Alarm"
             else:
                 return "Running"
-        elif self.BitIsEqual(RegVal, 0x000F0000, 0x00080000):
+        elif self.BitIsEqual(RegVal, 0x001F0000, 0x00080000):
             return "Stopped in Alarm"
-        elif self.BitIsEqual(RegVal, 0x000F0000, 0x00060000):
+        elif self.BitIsEqual(RegVal, 0x001F0000, 0x00060000):
             return "Running in Warning"
-        elif self.BitIsEqual(RegVal, 0x000F0000, 0x00000000):
+        elif self.BitIsEqual(RegVal, 0x001F0000, 0x00000000):
             return "Off - Ready"
+        elif self.BitIsEqual(RegVal, 0x001F0000, 0x000F0000):   # added for Evo 4.5L
+            return "Off - Remote Switch Off"
+        elif self.BitIsEqual(RegVal, 0x001F0000, 0x001F0000):   # added for Evo 4.5L
+            return "Firmware Update in Progress"
         else:
             self.FeedbackPipe.SendFeedback(
                 "Unknown EngineState",
@@ -3609,6 +3788,8 @@ class Evolution(GeneratorController):
             return "Auto"
         elif self.BitIsEqual(RegVal, 0x0FFFF, 0x07):
             return "Off"
+        elif self.BitIsEqual(RegVal, 0x000F0000, 0x000F0000):   # added for Evo 4.5L
+            return "Off via Remote Command"
         elif self.BitIsEqual(RegVal, 0x0FFFF, 0x06):
             return "Manual"
         elif self.BitIsEqual(RegVal, 0x0FFFF, 0x17):
@@ -3852,6 +4033,7 @@ class Evolution(GeneratorController):
             #   "powerfactor" : float value (default is 1.0) used if converting from current to power or power to current
             #   ctdata[] : list of amps for each leg
             #   ctpower[] :  list of power in kW for each leg
+            #   voltagelegs[] : list of voltage legs
             #   voltage : optional, float value of total RMS voltage (all legs combined)
             #   phase : optional, int (1 or 3)
             # }
@@ -3862,11 +4044,13 @@ class Evolution(GeneratorController):
             if strict and not gauge:
                 if self.EvolutionController and self.LiquidCooled:
                     if self.GetTransferStatus().lower() != "generator":
+                        # use the external CT if the transfer switch is active
                         if gauge:
                             return DefaultReturn
                         else:
                             return None
-                if not self.SystemInOutage:
+                elif not self.SystemInOutage:
+                    # use the external CT if there is an outage
                     if gauge:
                         return DefaultReturn
                     else:
@@ -3880,9 +4064,9 @@ class Evolution(GeneratorController):
         except Exception as e1:
             self.LogErrorLine("Error in CheckExternalCTData: " + str(e1))
             return DefaultReturn
-
     # ------------ Evolution:GetCurrentOutput -----------------------------------
-    def GetCurrentOutput(self, ReturnFloat=False):
+    def GetCurrentOutput(self, ReturnFloat=False, force_sensor = False, leg = None):
+        # leg is None, "ct1" or "ct2"
 
         CurrentOutput = 0.0
         Divisor = 1.0
@@ -3903,9 +4087,18 @@ class Evolution(GeneratorController):
             if "Stopped" in EngineState or "Off" in EngineState or not len(EngineState):
                 return DefaultReturn
 
-            ReturnValue = self.CheckExternalCTData(request="current", ReturnFloat=ReturnFloat)
-            if ReturnValue != None:
-                return ReturnValue
+            
+            if not force_sensor:
+                request = "current"
+                if leg != None:
+                    request = leg
+                ReturnValue = self.CheckExternalCTData(request=request, ReturnFloat=ReturnFloat)
+                if ReturnValue != None:
+                    return ReturnValue
+
+            if not self.EvolutionController or self.LiquidCooled and leg != None:
+                # only EvoAC will return two legs
+                return DefaultReturn
 
             if self.EvolutionController and self.LiquidCooled:
                 Value = self.GetRegisterValueFromList("0058")  # Hall Effect Sensor
@@ -3916,7 +4109,11 @@ class Evolution(GeneratorController):
                     CurrentFloat = 0.0
 
                 if self.CurrentDivider == None or self.CurrentDivider <= 0:
-                    Divisor = 1000     # This should be Hall Field Current in mA so divide by 1000 for amps
+                    FWVersion = self.GetFirmwareVersion()
+                    if len(FWVersion) and (self.VersionTuple(FWVersion) >= (1, 43)):
+                        Divisor = 1000     # This should be Hall Field Current in mA so divide by 1000 for amps
+                    else:
+                        Divisor = 100
                 else:
                     Divisor = self.CurrentDivider
 
@@ -3934,7 +4131,14 @@ class Evolution(GeneratorController):
                     Value2 = self.GetRegisterValueFromList("05f5")
                     DebugInfo += Value
                     if len(Value) and len(Value2):
-                        CurrentFloat = int(Value, 16) + int(Value2, 16)
+                        CurrentLeg1Int = int(Value, 16)
+                        CurrentLeg2Int = int(Value2, 16)
+                        if leg == "ct1":
+                            CurrentFloat = float(CurrentLeg1Int)
+                        elif leg == "ct2":
+                            CurrentFloat = float(CurrentLeg2Int)
+                        else:
+                            CurrentFloat = CurrentLeg1Int + CurrentLeg2Int
                     else:
                         CurrentFloat = 0.0
                 else:
@@ -3963,8 +4167,8 @@ class Evolution(GeneratorController):
                     12: None,  # ["8KVA", "50", "220,230,240", "1"],    # 3 distinct models 220, 230, 240
                     13: None,  # ["10KVA", "50", "220,230,240", "1"],   # 3 distinct models 220, 230, 240
                     14: None,  # ["13KVA", "50", "220,230,240", "1"],   # 3 distinct models 220, 230, 240
-                    15: 56.24,  # ["11KW", "60" ,"240", "1"],
-                    17: 21.48,  # ["22KW", "60", "120/240", "1"],
+                    15: None,  # ["11KW", "60" ,"240", "1"],
+                    17: None,  # ["22KW", "60", "120/240", "1"],
                     21: None,  # ["11KW", "60", "240 LS", "1"],
                     22: None,  # Power Pact
                     32: None,  # ["Trinity", "60", "208 3Phase", "3"],  # G007077
@@ -3981,7 +4185,12 @@ class Evolution(GeneratorController):
                 if self.CurrentDivider == None or self.CurrentDivider <= 0:
                     if LookUpReturn == None:
                         if not self.LegacyPower:
-                            Divisor = 20.0  # Default Divisor This is 20 because CT1 + CT2 / 2 is average / 10 again because the CT is divide by 10
+                            if leg == None:
+                                # calculate the total current on both legs
+                                Divisor = 20.0  # Default Divisor This is 20 because CT1 + CT2 / 2 is average / 10 again because the CT is divide by 10
+                            else:
+                                # calcualate one leg
+                                Divisor = 10.0  # just use 10 as this is a div by 10 CT 
                         else:
                             Divisor = (
                                 22.0 / float(self.NominalKW)
@@ -4216,6 +4425,22 @@ class Evolution(GeneratorController):
         else:
             return ""
 
+    # ------------ Evolution:GetPreheatTime ------------------------------------
+    def GetPreheatTime(self):
+
+        # get Startup Delay
+        if self.EvolutionController and self.LiquidCooled:
+            return self.GetParameter("023f", Label="s")
+        else:
+            return ""
+    # ------------ Evolution:GetWarmupDelay ------------------------------------
+    def GetWarmupDelay(self):
+
+        # get Startup Delay
+        if self.EvolutionController and self.LiquidCooled:
+            return self.GetParameter("0238", Label="s")
+        else:
+            return ""
     # ------------ Evolution:GetUtilityVoltage ----------------------------------
     def GetUtilityVoltage(self, ReturnInt=False):
 
@@ -4243,9 +4468,9 @@ class Evolution(GeneratorController):
         if not "Stopped" in EngineState and not "Off" in EngineState:
             return "Not Charging"
 
-        Value = self.GetParameter("05ee", Divider=100.0, ReturnFloat=True)
+        Value = self.GetParameter("05ee", Divider=1000.0, ReturnFloat=True)
         if self.LiquidCooled:
-            CompValue = 0.9
+            CompValue = 0.09
         else:
             CompValue = 0
         if Value > CompValue:
@@ -4498,7 +4723,7 @@ class Evolution(GeneratorController):
             else:
                 return Date.strftime("%m/%d/%Y ")
         except Exception as e1:
-            self.LogErrorLine("Error in GetServiceDueDate: " + str(e1))
+            self.LogErrorLine("Error in GetServiceDueDate: " + serviceType + " : " + str(e1))
             return ""
 
     # ----------  Controller:GetHardwareVersion  ---------------------------------
@@ -4568,6 +4793,7 @@ class Evolution(GeneratorController):
                         % (self.SavedFirmwareVersion, FWVersionString)
                     )
                     msgbody += self.DisplayStatus()
+                    msgbody += "\nIP Address: " + self.GetNetworkIp()
                     self.MessagePipe.SendMessage(
                         msgsubject, msgbody, msgtype=MessageType
                     )
@@ -4684,13 +4910,12 @@ class Evolution(GeneratorController):
                 )
 
             if self.EvolutionController:
-                Outage["Outage"].append(
-                    {
-                        "Startup Delay": self.UnitsOut(
-                            self.GetStartupDelay(), type=int, NoString=JSONNum
-                        )
-                    }
-                )
+                Outage["Outage"].append({"Startup Delay": self.UnitsOut(self.GetStartupDelay(), type=int, NoString=JSONNum)})
+                if self.EvolutionController and self.LiquidCooled:
+                    Outage["Outage"].append({"Warm-up Delay": self.UnitsOut(self.GetWarmupDelay(), type=int, NoString=JSONNum)})
+                    if self.EngineDisplacement == "2.3 L" or self.EngineDisplacement == "2.4 L":
+                        Outage["Outage"].append({"Preheat Time": self.UnitsOut(self.GetPreheatTime(), type=int, NoString=JSONNum)})
+
 
             Outage["Outage"].append({"Outage Log": self.DisplayOutageHistory(JSONNum=JSONNum)})
 
@@ -4746,6 +4971,14 @@ class Evolution(GeneratorController):
             if self.EvolutionController and self.LiquidCooled:
                 Engine.append({"Battery Status": self.GetBatteryStatus()})
 
+            if self.EvolutionController and not self.PowerPact and not self.SynergyController:
+                Engine.append(
+                    {"Battery Charger Current": self.ValueOut(
+                        self.GetParameter("05ee", ReturnInt= True), "mA", JSONNum
+                        )
+                    }
+                )
+
             Engine.append(
                 {"RPM": self.ValueOut(self.GetRPM(ReturnInt=True), "", JSONNum)}
             )
@@ -4757,7 +4990,7 @@ class Evolution(GeneratorController):
                     )
                 }
             )
-            if not self.PreNexus:
+            if not self.PreNexus and not self.PowerPact:
                 Engine.append(
                     {
                         "Output Voltage": self.ValueOut(
@@ -4767,20 +5000,16 @@ class Evolution(GeneratorController):
                 )
 
             if self.PowerMeterIsSupported():
-                Engine.append(
-                    {
-                        "Output Current": self.ValueOut(
-                            self.GetCurrentOutput(ReturnFloat=True), "A", JSONNum
-                        )
-                    }
-                )
-                Engine.append(
-                    {
-                        "Output Power (Single Phase)": self.ValueOut(
-                            self.GetPowerOutput(ReturnFloat=True), "kW", JSONNum
-                        )
-                    }
-                )
+                Engine.append({"Output Current": self.ValueOut(self.GetCurrentOutput(ReturnFloat=True), "A", JSONNum)})
+                if self.EvolutionController and not self.LiquidCooled and not self.bDisablePowerLog:
+                    Engine.append({"Current L1": self.ValueOut(self.GetCurrentOutput(ReturnFloat=True, force_sensor=False, leg = "ct1"), "A", JSONNum)})
+                    Engine.append({"Current L2": self.ValueOut(self.GetCurrentOutput(ReturnFloat=True, force_sensor=False, leg = "ct2"), "A", JSONNum)})
+
+                if self.UseExternalCTData and self.LiquidCooled and self.EvolutionController:
+                    # show the internal Hall sensor if external CTs are used. If no external CTs are present, then this is shown with "Output Current"
+                    Engine.append({"Hall Effect Sensor": self.ValueOut(self.GetCurrentOutput(ReturnFloat=True, force_sensor=True), "A", JSONNum)})
+
+                Engine.append({"Output Power (Single Phase)": self.ValueOut(self.GetPowerOutput(ReturnFloat=True), "kW", JSONNum)})
 
             Engine.append(
                 {
@@ -4923,7 +5152,9 @@ class Evolution(GeneratorController):
 
             if not NoTile:
 
-                StartInfo["buttons"] = {}
+                if len(self.Buttons) == 0:
+                    self.SetupButtons()
+                StartInfo["buttons"]= self.GetButtons()
 
                 StartInfo["pages"] = {
                     "status": True,
@@ -4946,6 +5177,33 @@ class Evolution(GeneratorController):
 
         return StartInfo
 
+    # -------------Evolution:SetupButtons---------------------------------------
+    def SetupButtons(self):
+        try:
+            if self.EvolutionController and self.LiquidCooled:
+                FileName = "EvoLC_commands.json"
+                ConfigFileName = os.path.join(
+                    os.path.dirname(os.path.dirname(os.path.realpath(__file__))),
+                    "data",
+                    "commands",
+                    FileName
+                )
+                if os.path.isfile(ConfigFileName):
+                    try:
+                        with open(ConfigFileName) as infile:
+                            command_import = json.load(infile)
+                            self.Buttons = command_import["buttons"]
+
+                    except Exception as e1:
+                        self.LogErrorLine("Error in SetupButtons reading config import file: " + str(e1))
+                        return
+                else:
+                    self.LogError("Error in SetupButtongs reading button import file: " + str(ConfigFileName))
+                    return
+
+        except Exception as e1:
+            self.LogErrorLine("Error in SetupButtons: " + str(e1))
+        
     # ---------- Evolution:GetConfig--------------------------------------------
     def GetConfig(self):
 
@@ -5050,6 +5308,9 @@ class Evolution(GeneratorController):
     # return true if Panel buttons are settable via the software
     def RemoteButtonsSupported(self):
 
+        if self.Evo45L:
+            return False
+        
         if self.EvolutionController and self.LiquidCooled:
             return True
         return False
@@ -5063,7 +5324,9 @@ class Evolution(GeneratorController):
             return True
         if not self.EvolutionController:  # Not supported by Nexus at this time
             return False
-
+        if self.PowerPact:
+            return False
+        
         if (
             not len(self.NominalKW)
             or self.NominalKW.lower() == "unknown"

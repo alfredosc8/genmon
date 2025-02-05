@@ -2,6 +2,7 @@
   "controller_name": "Briggs & Stratton GC-1032 Controller",
   "rated_max_output_power_kw": {
     "reg": "0054",
+    "reg_type": "input",
     "mask": "7f00",
     "multiplier": 0.00390625,
     "type": "int",
@@ -12,29 +13,29 @@
   "rated_nominal_freq": 60,
   "nominal_battery_voltage": 12,
   "generator_phase": 1,
-  "base_registers": {
+  "input_registers": {
     "0001": 2,
     "0002": 2,
-    "0004": 2,
-    "0007": 2,
-    "0008": 2,
+    "0004": {"length": 2, "text": "Generator L1-L2 Voltage"},
+    "0007": {"length": 2, "text": "Generator L1 Frequency"},
+    "0008": {"length": 2, "text": "Generator L2 Frequency"},
     "000a": 2,
     "000b": 2,
     "000d": 2,
     "000e": 2,
     "000f": 2,
-    "0011": 2,
-    "0014": 2,
-    "0015": 2,
-    "0017": 2,
-    "0018": 2,
+    "0011": {"length": 2, "text": "Utility L1-L2 Voltage"},
+    "0014": {"length": 2, "text": "Utility L1 Frequency"},
+    "0015": {"length": 2, "text": "Utility L2 Frequency"},
+    "0017": {"length": 2, "text": "Generator L1 Current"},
+    "0018": {"length": 2, "text": "Generator L2 Current"},
     "001a": 2,
     "001b": 2,
-    "001d": 2,
+    "001d": {"length": 2, "text": "Total Power kW"},
     "001e": 2,
     "001f": 2,
     "0020": 2,
-    "0022": 2,
+    "0022": {"length": 2, "text": "Total Load kVA"},
     "0023": 2,
     "0024": 2,
     "0026": 2,
@@ -44,42 +45,42 @@
     "002a": 2,
     "002b": 2,
     "0033": 2,
-    "0034": 2,
+    "0034": {"length": 2, "text": "Ambient Temp"},
     "0035": 2,
     "0036": 2,
-    "0038": 2,
-    "0039": 2,
-    "003a": 2,
-    "003b": 2,
-    "003c": 2,
-    "003d": 2,
-    "0040": 2,
-    "0041": 2,
-    "0042": 2,
-    "0043": 2,
-    "0044": 2,
-    "0045": 2,
-    "0046": 2,
-    "0047": 2,
-    "0048": 2,
-    "0049": 2,
-    "004a": 2,
-    "004b": 2,
-    "004c": 2,
-    "004d": 2,
-    "004e": 2,
-    "004f": 2,
-    "0050": 2,
-    "0051": 2,
-    "0052": 2,
-    "0053": 2,
-    "0054": 2,
+    "0038": {"length": 2, "text": "Battery Voltage"},
+    "0039": {"length": 2, "text": "Engine Speed"},
+    "003a": {"length": 2, "text": "Number of Starts"},
+    "003b": {"length": 2, "text": "Number of Trips"},
+    "003c": {"length": 2, "text": "Engine Run Time - Hours"},
+    "003d": {"length": 2, "text": "Engine Run Time - Minutes"},
+    "0040": {"length": 2, "text": "Alarm Register 1"},
+    "0041": {"length": 2, "text": "Alarm Register 2"},
+    "0042": {"length": 2, "text": "Alarm Register 3"},
+    "0043": {"length": 2, "text": "Alarm Register 4"},
+    "0044": {"length": 2, "text": "Alarm Register 5"},
+    "0045": {"length": 2, "text": "Alarm Register 6"},
+    "0046": {"length": 2, "text": "Alarm Register 7"},
+    "0047": {"length": 2, "text": "Alarm Register 8"},
+    "0048": {"length": 2, "text": "Alarm Register 9"},
+    "0049": {"length": 2, "text": "Alarm Register 10"},
+    "004a": {"length": 2, "text": "Alarm Register 11"},
+    "004b": {"length": 2, "text": "Alarm Register 12"},
+    "004c": {"length": 2, "text": "Alarm Register 13"},
+    "004d": {"length": 2, "text": "Alarm Register 14"},
+    "004e": {"length": 2, "text": "Alarm Register 15"},
+    "004f": {"length": 2, "text": "Status Register"},
+    "0050": {"length": 2, "text": "Time - Minutes"},
+    "0051": {"length": 2, "text": "Time - Hours"},
+    "0052": {"length": 2, "text": "Date - Month / Day"},
+    "0053": {"length": 2, "text": "Date - Year"},
+    "0054": {"length": 2, "text": "Nominal kW"},
     "0055": 2,
     "0056": 2,
     "00b4": 2,
-    "00b5": 2,
-    "00b6": 2,
-    "00b7": 2,
+    "00b5": {"length": 2, "text": "Controller Model"},
+    "00b6": {"length": 2, "text": "Controller Firmware - Major"},
+    "00b7": {"length": 2, "text": "Controller Firmware - Minor"},
     "00b8": 2,
     "00b9": 2,
     "00ba": 2,
@@ -97,6 +98,7 @@
   "switch_state": [
     {
       "reg": "004f",
+      "reg_type": "input",
       "mask": "3800",
       "value": "3000",
       "type": "bits",
@@ -105,6 +107,7 @@
     },
     {
       "reg": "004f",
+      "reg_type": "input",
       "mask": "3800",
       "value": "3800",
       "type": "bits",
@@ -113,6 +116,7 @@
     },
     {
       "reg": "004f",
+      "reg_type": "input",
       "mask": "3800",
       "value": "2800",
       "type": "bits",
@@ -121,6 +125,7 @@
     },
     {
       "reg": "004f",
+      "reg_type": "input",
       "mask": "3800",
       "value": "2000",
       "type": "bits",
@@ -131,6 +136,7 @@
   "generator_status": [
     {
       "reg": "004f",
+      "reg_type": "input",
       "mask": "7F00",
       "type": "bits",
       "value": "3900",
@@ -139,6 +145,7 @@
     },
     {
       "reg": "004f",
+      "reg_type": "input",
       "mask": "7F00",
       "type": "bits",
       "title": "Power Status",
@@ -147,6 +154,7 @@
     },
     {
       "reg": "004f",
+      "reg_type": "input",
       "mask": "7F00",
       "type": "bits",
       "title": "Power Status",
@@ -155,6 +163,7 @@
     },
     {
       "reg": "004f",
+      "reg_type": "input",
       "mask": "7F00",
       "type": "bits",
       "title": "Power Status",
@@ -163,6 +172,7 @@
     },
     {
       "reg": "004f",
+      "reg_type": "input",
       "mask": "7F00",
       "type": "bits",
       "title": "Power Status",
@@ -171,6 +181,7 @@
     },
     {
       "reg": "004f",
+      "reg_type": "input",
       "mask": "7F00",
       "type": "bits",
       "title": "Power Status",
@@ -181,6 +192,7 @@
   "alarm_conditions": [
     {
       "reg": "0040",
+      "reg_type": "input",
       "mask": "f000",
       "value": "0000",
       "type": "bits",
@@ -189,6 +201,7 @@
     },
     {
       "reg": "0040",
+      "reg_type": "input",
       "mask": "0f00",
       "value": "0000",
       "type": "bits",
@@ -197,6 +210,7 @@
     },
     {
       "reg": "0041",
+      "reg_type": "input",
       "mask": "f000",
       "value": "0000",
       "type": "bits",
@@ -205,6 +219,7 @@
     },
     {
       "reg": "0041",
+      "reg_type": "input",
       "mask": "0f00",
       "value": "0000",
       "type": "bits",
@@ -213,6 +228,7 @@
     },
     {
       "reg": "0041",
+      "reg_type": "input",
       "mask": "00f0",
       "value": "0000",
       "type": "bits",
@@ -221,6 +237,7 @@
     },
     {
       "reg": "0041",
+      "reg_type": "input",
       "mask": "000f",
       "value": "0000",
       "type": "bits",
@@ -229,6 +246,7 @@
     },
     {
       "reg": "0042",
+      "reg_type": "input",
       "mask": "00f0",
       "value": "0000",
       "type": "bits",
@@ -237,6 +255,7 @@
     },
     {
       "reg": "0042",
+      "reg_type": "input",
       "mask": "000f",
       "value": "0000",
       "type": "bits",
@@ -245,6 +264,7 @@
     },
     {
       "reg": "0043",
+      "reg_type": "input",
       "mask": "f000",
       "value": "0000",
       "type": "bits",
@@ -253,6 +273,7 @@
     },
     {
       "reg": "0043",
+      "reg_type": "input",
       "mask": "0f00",
       "value": "0000",
       "type": "bits",
@@ -261,6 +282,7 @@
     },
     {
       "reg": "0043",
+      "reg_type": "input",
       "mask": "00f0",
       "value": "0000",
       "type": "bits",
@@ -269,6 +291,7 @@
     },
     {
       "reg": "0043",
+      "reg_type": "input",
       "mask": "000f",
       "value": "0000",
       "type": "bits",
@@ -277,14 +300,18 @@
     },
     {
       "reg": "0044",
-      "mask": "000f",
-      "value": "0000",
-      "type": "bits",
+      "reg_type": "input",
+      "mask": "0f00",
+      "value": "1",
+      "type": "regex",
+      "comment": "This will report an alarm on if any bits 9 - 12 are 1",
+      "regex": "^[1-9a-f]00$",
       "title": "Alarm",
       "text": "Maintenance Required"
     },
     {
       "reg": "0045",
+      "reg_type": "input",
       "mask": "f000",
       "value": "0000",
       "type": "bits",
@@ -293,6 +320,7 @@
     },
     {
       "reg": "0045",
+      "reg_type": "input",
       "mask": "0f00",
       "value": "0000",
       "type": "bits",
@@ -301,6 +329,7 @@
     },
     {
       "reg": "0045",
+      "reg_type": "input",
       "mask": "00f0",
       "value": "0000",
       "type": "bits",
@@ -309,6 +338,7 @@
     },
     {
       "reg": "0046",
+      "reg_type": "input",
       "mask": "0f00",
       "value": "0000",
       "type": "bits",
@@ -317,6 +347,7 @@
     },
     {
       "reg": "0047",
+      "reg_type": "input",
       "mask": "00f0",
       "value": "0000",
       "type": "bits",
@@ -325,6 +356,7 @@
     },
     {
       "reg": "0047",
+      "reg_type": "input",
       "mask": "000f",
       "value": "0000",
       "type": "bits",
@@ -333,6 +365,7 @@
     },
     {
       "reg": "0048",
+      "reg_type": "input",
       "mask": "f000",
       "value": "0000",
       "type": "bits",
@@ -341,6 +374,7 @@
     },
     {
       "reg": "0048",
+      "reg_type": "input",
       "mask": "000f",
       "value": "0000",
       "type": "bits",
@@ -349,6 +383,7 @@
     },
     {
       "reg": "0049",
+      "reg_type": "input",
       "mask": "f000",
       "value": "0000",
       "type": "bits",
@@ -357,6 +392,7 @@
     },
     {
       "reg": "0049",
+      "reg_type": "input",
       "mask": "0f00",
       "value": "0000",
       "type": "bits",
@@ -365,6 +401,7 @@
     },
     {
       "reg": "0049",
+      "reg_type": "input",
       "mask": "00f0",
       "value": "0000",
       "type": "bits",
@@ -373,6 +410,7 @@
     },
     {
       "reg": "0049",
+      "reg_type": "input",
       "mask": "000f",
       "value": "0000",
       "type": "bits",
@@ -381,6 +419,7 @@
     },
     {
       "reg": "004b",
+      "reg_type": "input",
       "mask": "000f",
       "value": "0000",
       "type": "bits",
@@ -389,6 +428,7 @@
     },
     {
       "reg": "004c",
+      "reg_type": "input",
       "mask": "f000",
       "value": "0000",
       "type": "bits",
@@ -397,6 +437,7 @@
     },
     {
       "reg": "004c",
+      "reg_type": "input",
       "mask": "00f0",
       "value": "0000",
       "type": "bits",
@@ -405,6 +446,7 @@
     },
     {
       "reg": "004c",
+      "reg_type": "input",
       "mask": "000f",
       "value": "0000",
       "type": "bits",
@@ -413,6 +455,7 @@
     },
     {
       "reg": "004d",
+      "reg_type": "input",
       "mask": "f000",
       "value": "0000",
       "type": "bits",
@@ -421,6 +464,7 @@
     },
     {
       "reg": "004d",
+      "reg_type": "input",
       "mask": "0f00",
       "value": "0000",
       "type": "bits",
@@ -437,6 +481,7 @@
     },
     {
       "reg": "004f",
+      "reg_type": "input",
       "mask": "0001",
       "type": "bits",
       "title": "Status",
@@ -445,6 +490,7 @@
     },
     {
       "reg": "004f",
+      "reg_type": "input",
       "mask": "0002",
       "type": "bits",
       "title": "Status",
@@ -453,6 +499,7 @@
     },
     {
       "reg": "004f",
+      "reg_type": "input",
       "mask": "0004",
       "type": "bits",
       "title": "Status",
@@ -463,6 +510,7 @@
   "engine_state": [
     {
       "reg": "004f",
+      "reg_type": "input",
       "mask": "80",
       "value": "80",
       "type": "bits",
@@ -471,6 +519,7 @@
     },
     {
       "reg": "004f",
+      "reg_type": "input",
       "mask": "40",
       "value": "40",
       "type": "bits",
@@ -480,6 +529,7 @@
 
     {
       "reg": "004f",
+      "reg_type": "input",
       "mask": "0100",
       "value": "0100",
       "type": "bits",
@@ -488,6 +538,7 @@
     },
     {
       "reg": "004e",
+      "reg_type": "input",
       "mask": "0010",
       "type": "bits",
       "value": "0010",
@@ -496,6 +547,7 @@
     },
     {
       "reg": "004e",
+      "reg_type": "input",
       "mask": "0020",
       "type": "bits",
       "value": "0020",
@@ -506,6 +558,7 @@
   "status": [
     {
       "reg": "004f",
+      "reg_type": "input",
       "mask": "8000",
       "value": "8000",
       "type": "bits",
@@ -514,6 +567,7 @@
     },
     {
       "reg": "004f",
+      "reg_type": "input",
       "mask": "0008",
       "type": "bits",
       "title": "Status",
@@ -522,6 +576,7 @@
     },
     {
       "reg": "004f",
+      "reg_type": "input",
       "mask": "4000",
       "value": "0000",
       "type": "bits",
@@ -530,6 +585,7 @@
     },
     {
       "reg": "004f",
+      "reg_type": "input",
       "mask": "4000",
       "value": "4000",
       "type": "bits",
@@ -537,35 +593,125 @@
       "text": "Healthy"
     },
     {
-      "reg": "001d",
-      "mask": "ffff",
-      "multiplier": 0.1,
-      "type": "float",
-      "title": "Load Total",
-      "sensor": "current",
-      "units": "kW",
-      "nominal": 20
-    },
-    {
-      "reg": "0039",
-      "mask": "ffff",
-      "multiplier": 1,
-      "type": "int",
-      "title": "Engine Speed",
-      "units": null,
-      "sensor": "rpm",
-      "nominal": 3600
-    },
-    {
       "reg": "0038",
+      "reg_type": "input",
       "mask": "ffff",
       "multiplier": 0.1,
       "type": "float",
       "title": "Battery",
-      "units": "V",
-      "sensor": "batteryvolts",
-      "nominal": 12,
-      "maximum": 24
+      "units": "V"
+    },
+    {"title": "Engine",
+        "comment": "The 'container' modifier will allow the values to be displayed with some hierarchy", 
+        "container": true,
+        "value" : [
+          {
+            "reg": "001d",
+            "reg_type": "input",
+            "mask": "ffff",
+            "multiplier": 0.1,
+            "type": "float",
+            "title": "Load Total (kW)",
+            "units": "kW"
+          },
+          {
+            "reg": "0022",
+            "reg_type": "input",
+            "mask": "ffff",
+            "multiplier": 0.1,
+            "type": "float",
+            "title": "Load Total (kVA)",
+            "units": "kVA"
+          },
+          {
+            "reg": "0004",
+            "reg_type": "input",
+            "mask": "ffff",
+            "multiplier": 0.1,
+            "type": "float",
+            "title": "Generator L1-L2 Volts",
+            "units": "V"
+          },
+          {
+            "reg": "0007",
+            "reg_type": "input",
+            "mask": "ffff",
+            "multiplier": 0.1,
+            "type": "float",
+            "title": "Generator L1 Frequency",
+            "units": "Hz"
+          },
+          {
+            "reg": "0008",
+            "reg_type": "input",
+            "mask": "ffff",
+            "multiplier": 0.1,
+            "type": "float",
+            "title": "Generator L2 Frequency",
+            "units": "Hz"
+          },
+          {
+            "reg": "0017",
+            "reg_type": "input",
+            "mask": "ffff",
+            "multiplier": 0.1,
+            "type": "float",
+            "title": "Generator L1 Current",
+            "units": "A"
+          },
+          {
+            "reg": "0018",
+            "reg_type": "input",
+            "mask": "ffff",
+            "multiplier": 0.1,
+            "type": "float",
+            "title": "Generator L2 Current",
+            "units": "A"
+          },
+          {
+            "reg": "0039",
+            "reg_type": "input",
+            "mask": "ffff",
+            "multiplier": 1,
+            "type": "int",
+            "title": "Engine Speed",
+            "units": null,
+            "nominal": 3600
+          }
+        ]
+    },
+    {"title": "Line",
+        "comment": "The 'container' modifier will allow the values to be displayed with some hierarchy", 
+        "container": true,
+        "value" : [
+          {
+            "reg": "0011",
+            "reg_type": "input",
+            "mask": "ffff",
+            "multiplier": 0.1,
+            "type": "float",
+            "title": "Utility L1-L2 Volts",
+            "units": "V"
+          },
+          {
+            "reg": "0014",
+            "reg_type": "input",
+            "mask": "ffff",
+            "multiplier": 0.1,
+            "type": "float",
+            "title": "Utility L1 Frequency",
+            "units": "Hz"
+          },
+          {
+            "reg": "0015",
+            "reg_type": "input",
+            "mask": "ffff",
+            "multiplier": 0.1,
+            "type": "float",
+            "title": "Utility L2 Frequency",
+            "units": "Hz"
+          }
+        ]
     }
   ],
   "maintenance": [
@@ -576,12 +722,14 @@
       "value": [
         {
           "reg": "003c",
+          "reg_type": "input",
           "type": "int",
           "mask": "ffff",
           "title": "Hours"
         },
         {
           "reg": "003d",
+          "reg_type": "input",
           "type": "int",
           "mask": "ffff",
           "format": "%02d",
@@ -596,12 +744,14 @@
       "value": [
         {
           "reg": "0051",
+          "reg_type": "input",
           "mask": "00ff",
           "title": "hours",
           "type": "int"
         },
         {
           "reg": "0050",
+          "reg_type": "input",
           "mask": "ff00",
           "title": "minutes",
           "format": "%02d",
@@ -612,6 +762,7 @@
     },
     {
       "reg": "003a",
+      "reg_type": "input",
       "mask": "ffff",
       "multiplier": 1,
       "type": "int",
@@ -619,6 +770,7 @@
     },
     {
       "reg": "003b",
+      "reg_type": "input",
       "mask": "ffff",
       "multiplier": 1,
       "type": "int",
@@ -631,13 +783,15 @@
       "value": [
         {
           "reg": "0052",
-          "mask": "ff00",
+          "reg_type": "input",
           "type": "int",
           "title": "month",
-          "multiplier": 0.00390625
+          "mask" : "ff00",
+          "shiftright": 8
         },
         {
           "reg": "0052",
+          "reg_type": "input",
           "mask": "00ff",
           "type": "int",
           "title": "day"
@@ -646,6 +800,7 @@
           "reg": "0053",
           "mask": "ffff",
           "type": "int",
+          "reg_type":"input",
           "title": "year"
         }
       ]
@@ -657,12 +812,14 @@
       "value": [
         {
           "reg": "00b6",
+          "reg_type": "input",
           "type": "int",
           "mask": "ffff",
           "title": "Major"
         },
         {
           "reg": "00b7",
+          "reg_type": "input",
           "type": "int",
           "mask": "ffff",
           "title": "Minor"
@@ -671,6 +828,7 @@
     },
     {
       "reg": "00b5",
+      "reg_type": "input",
       "mask": "ffff",
       "multiplier": 1,
       "type": "int",
@@ -678,6 +836,7 @@
     },
     {
       "reg": "0034",
+      "reg_type": "input",
       "mask": "ffff",
       "multiplier": 0.1,
       "type": "float",
@@ -688,6 +847,7 @@
   "gauges": [
     {
       "reg": "0011",
+      "reg_type": "input",
       "mask": "ffff",
       "multiplier": 0.1,
       "type": "float",
@@ -698,6 +858,7 @@
     },
     {
       "reg": "0014",
+      "reg_type": "input",
       "mask": "ffff",
       "multiplier": 0.1,
       "type": "float",
@@ -708,6 +869,7 @@
     },
     {
       "reg": "0015",
+      "reg_type": "input",
       "mask": "ffff",
       "multiplier": 0.1,
       "type": "float",
@@ -718,6 +880,7 @@
     },
     {
       "reg": "0038",
+      "reg_type": "input",
       "mask": "ffff",
       "multiplier": 0.1,
       "type": "float",
@@ -729,36 +892,40 @@
     },
     {
       "reg": "0004",
+      "reg_type": "input",
       "mask": "ffff",
       "multiplier": 0.1,
       "type": "float",
-      "title": "Generator L1-L2",
+      "title": "L1-L2 Volts",
       "units": "V",
       "sensor": "linevolts",
       "nominal": 240
     },
     {
       "reg": "0007",
+      "reg_type": "input",
       "mask": "ffff",
       "multiplier": 0.1,
       "type": "float",
-      "title": "Generator L1",
+      "title": "L1 Frequency",
       "units": "Hz",
       "sensor": "frequency",
       "nominal": 60
     },
     {
       "reg": "0008",
+      "reg_type": "input",
       "mask": "ffff",
       "multiplier": 0.1,
       "type": "float",
-      "title": "Generator L2",
+      "title": "L2 Frequency",
       "units": "Hz",
       "sensor": "frequency",
       "nominal": 60
     },
     {
       "reg": "0039",
+      "reg_type": "input",
       "mask": "ffff",
       "multiplier": 1,
       "type": "int",
@@ -769,46 +936,51 @@
     },
     {
       "reg": "0017",
+      "reg_type": "input",
       "mask": "ffff",
       "multiplier": 0.1,
       "type": "float",
-      "title": "Generator L1",
+      "title": "L1 Current",
       "sensor": "current",
       "units": "A",
       "nominal": 100
     },
     {
       "reg": "0018",
+      "reg_type": "input",
       "mask": "ffff",
       "multiplier": 0.1,
       "type": "float",
-      "title": "Generator L2",
+      "title": "L2 Current",
       "sensor": "current",
       "units": "A",
       "nominal": 100
     },
     {
       "reg": "001d",
+      "reg_type": "input",
       "mask": "ffff",
       "multiplier": 0.1,
       "type": "float",
       "title": "Load Total",
-      "sensor": "current",
+      "sensor": "power",
       "units": "kW",
       "nominal": 20
     },
     {
       "reg": "0022",
+      "reg_type": "input",
       "mask": "ffff",
       "multiplier": 0.1,
       "type": "float",
       "title": "Load Total",
-      "sensor": "current",
+      "sensor": "power",
       "units": "kVA",
       "nominal": 41
     },
     {
       "reg": "001d",
+      "reg_type": "input",
       "mask": "ffff",
       "multiplier": 0.1,
       "type": "float",
@@ -824,6 +996,7 @@
       "title": "Select Manual Mode",
       "command_sequence": [
         {
+          "comment": "write to a holding register, input register are read only",
           "reg": "0000",
           "value": "0001"
         }
@@ -834,6 +1007,7 @@
       "title": "Select Automatic Mode",
       "command_sequence": [
         {
+          "comment": "write to a holding register, input register are read only",
           "reg": "0000",
           "value": "0004"
         }
@@ -844,10 +1018,12 @@
       "title": "Start Engine",
       "command_sequence": [
         {
+          "comment": "write to a holding register, input register are read only",
           "reg": "0000",
           "value": "0001"
         },
         {
+          "comment": "write to a holding register, input register are read only",
           "reg": "0000",
           "value": "0002"
         }
@@ -858,6 +1034,7 @@
       "title": "Stop Engine",
       "command_sequence": [
         {
+          "comment": "write to a holding register, input register are read only",
           "reg": "0000",
           "value": "0001"
         }
@@ -866,6 +1043,7 @@
   ],
   "power": {
     "reg": "001d",
+    "reg_type": "input",
     "mask": "ffff",
     "multiplier": 0.1,
     "type": "float",
@@ -875,6 +1053,7 @@
   },
   "outputvoltage": {
       "reg": "0004",
+      "reg_type": "input",
       "mask": "ffff",
       "multiplier": 0.1,
       "type": "int",
@@ -883,6 +1062,7 @@
     },
   "linevoltage": {
       "reg": "0011",
+      "reg_type": "input",
       "mask": "ffff",
       "multiplier": 0.1,
       "type": "float",
@@ -893,10 +1073,58 @@
   "pickupvoltage": 190,
   "run_hours": {
       "reg": "003c",
+      "reg_type": "input",
       "mask": "ffffffff",
       "multiplier": 1,
       "type": "int",
       "title": "Run Hours",
       "units": "h"
+    },
+    "datetime":{
+      "comment":"Used to print the date and time of the controller",
+      "type" : "list",
+      "exec": "mybsdt = datetime.datetime.strptime('{}/{}/{} {}:{}','%m/%d/%Y %H:%M');exec_out = mybsdt.strftime('%A %B %-d, %Y %H:%M')",
+      "title" : "Generator Time",
+      "value": [
+          {
+            "title": "Month",
+            "reg": "0052",
+            "reg_type": "input",
+            "type": "int",
+            "mask" : "ff00",
+            "shiftright": 8,
+            "comment" : "Month is upper half of word"
+          },
+          {
+            "title": "Day",
+            "reg": "0052",
+            "reg_type": "input",
+            "type": "int",
+            "mask" : "00ff"
+          },
+          {
+            "title": "Year",
+            "type": "int",
+            "mask" : "ffff",
+            "reg": "0053",
+            "reg_type": "input"
+          },
+          {
+            "title": "Hours",
+            "type": "int",
+            "mask" : "00ff",
+            "reg": "0051",
+            "reg_type": "input"
+          },
+          {
+            "reg": "0050",
+            "reg_type": "input",
+            "mask": "ff00",
+            "title": "Minutes",
+            "format": "%02d",
+            "type": "int",
+            "multiplier": 0.00390625
+          }
+      ]
     }
 }

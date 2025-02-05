@@ -68,6 +68,7 @@ class MyMail(MySupport):
         self.SSLEnabled = False
         self.TLSDisable = False
         self.UseBCC = False
+        self.UseHTML = False
         self.ExtendWait = 0
         self.Threads = {}  # Dict of mythread objects
         self.debug = False
@@ -84,6 +85,7 @@ class MyMail(MySupport):
             self.log = SetupLogger("mymail", self.logfile)
         else:
             self.log = log
+        self.console = None
 
         # if mymail.conf is present attempt to copy it from the
         # main source directory
@@ -92,7 +94,7 @@ class MyMail(MySupport):
                 copyfile(os.path.join(self.ModulePath, "mymail.conf"), self.configfile)
             else:
                 self.LogError("Missing config file : " + self.configfile)
-                sys.exit(1)
+                self.FatalError("Missing config file : " + self.configfile)
 
         self.config = MyConfig(filename=self.configfile, section="MyMail", log=self.log)
 
@@ -146,6 +148,7 @@ class MyMail(MySupport):
         use_ssl=False,
         tls_disable=False,
         smtpauth_disable=False,
+        use_html = False
     ):
 
         try:
@@ -180,20 +183,31 @@ class MyMail(MySupport):
             # update time
             tmstamp = datetime.datetime.now().strftime("%I:%M:%S %p")
 
+            try:
+                import email.policy
+                parent = MIMEMultipart('mixed',policy=email.policy.SMTP)
+            except:
+                parent = MIMEMultipart('mixed')
+
+            if use_html:
+                subtype = 'alternative'
+            else:
+                subtype = 'mixed'
             if sys.version_info[0] < 3:  # PYTHON 2
-                msg = MIMEMultipart()
+                msg = MIMEMultipart(subtype)
             else:  # PYTHON 3
                 try:
                     import email.policy
 
-                    msg = MIMEMultipart(policy=email.policy.SMTP)
+                    msg = MIMEMultipart(subtype,policy=email.policy.SMTP)
                 except:
-                    msg = MIMEMultipart()
+                    msg = MIMEMultipart(subtype)
 
+            parent.attach(msg)
             if sender_name == None or not len(sender_name):
-                msg["From"] = "<" + sender_account + ">"
+                parent["From"] = "<" + sender_account + ">"
             else:
-                msg["From"] = sender_name + " <" + sender_account + ">"
+                parent["From"] = sender_name + " <" + sender_account + ">"
         except Exception as e1:
             return "Error Initializing email: " + str(e1)
         try:
@@ -205,23 +219,22 @@ class MyMail(MySupport):
         except Exception as e1:
             pass
         try:
-            msg["To"] = recipient
-            msg["Date"] = formatdate(localtime=True)
-            msg["Subject"] = "Genmon Test Email"
+            parent["To"] = recipient
+            parent["Date"] = formatdate(localtime=True)
+            parent["Subject"] = "Genmon Test Email"
 
             msgstr = "\r\n" + "Test email from genmon\r\n"
-            body = (
-                "\r\n"
-                + "Time: "
-                + tmstamp
-                + "\r\n"
-                + "Date: "
-                + dtstamp
-                + "\r\n"
-                + msgstr
+            body = ("\r\n" + "Time: " + tmstamp + "\r\n"
+                    + "Date: " + dtstamp + "\r\n"
+                    + msgstr
             )
+            if use_html:
+                html_message = MyMail.ConvertTextToHTML(body)
+
             if sys.version_info[0] < 3:  # PYTHON 2
                 msg.attach(MIMEText(body, "plain"))
+                if use_html:
+                    msg.attach(MIMEText(html_message, "html"))
             else:  # PYTHON 3
                 try:
                     msg.attach(
@@ -229,6 +242,12 @@ class MyMail(MySupport):
                             body, "plain", _charset="utf-8", policy=email.policy.SMTP
                         )
                     )
+                    if use_html:
+                        msg.attach(
+                            MIMEText(
+                                html_message, "html", _charset="utf-8", policy=email.policy.SMTP
+                            )
+                        )
                 except:
                     msg.attach(MIMEText(body, "plain"))
         except Exception as e1:
@@ -253,9 +272,9 @@ class MyMail(MySupport):
                 session.login(MyMail.FilterAddress(email_account), str(password))
 
             if sys.version_info[0] < 3:  # PYTHON 2
-                message = msg.as_string()
+                message = parent.as_string()
             else:  # PYTHON 3
-                message = msg.as_bytes()
+                message = parent.as_bytes()
 
             if "," in recipient:
                 multiple_recipients = recipient.split(",")
@@ -268,8 +287,12 @@ class MyMail(MySupport):
                 )
         except Exception as e1:
             # self.LogErrorLine("Error SMTP sendmail: " + str(e1))
-            session.quit()
-            return "Error sending email: " + str(e1)
+            errorstring = str(e1)
+            try:
+                session.quit()
+            except:
+                pass
+            return "Error sending email: " + str(errorstring)
 
         session.quit()
         return "Success"
@@ -302,6 +325,14 @@ class MyMail(MySupport):
                     + str(idna.encode(addressSplit[1]).decode("ascii"))
                 )
             return address
+
+    # ---------- MyMail.ConvertTextToHTML --------------------------------------
+    @staticmethod
+    def ConvertTextToHTML(text):
+        try:
+            return "<pre>" + text + "</pre>"
+        except:
+            return text
 
     # ---------- MyMail.GetConfig -----------------------------------------------
     def GetConfig(self, reload=False):
@@ -338,6 +369,9 @@ class MyMail(MySupport):
 
             if self.config.HasOption("usebcc"):
                 self.UseBCC = self.config.ReadValue("usebcc", return_type=bool)
+            
+            if self.config.HasOption("use_html"):
+                self.UseHTML = self.config.ReadValue("use_html", return_type=bool)
 
             if self.config.HasOption("extend_wait"):
                 self.ExtendWait = self.config.ReadValue(
@@ -539,21 +573,31 @@ class MyMail(MySupport):
             dtstamp = datetime.datetime.now().strftime("%a %d-%b-%Y")
             # update time
             tmstamp = datetime.datetime.now().strftime("%I:%M:%S %p")
+            try:
+                import email.policy
+                parent = MIMEMultipart('mixed',policy=email.policy.SMTP)
+            except:
+                parent = MIMEMultipart('mixed')
 
+            if self.UseHTML:
+                subtype = 'alternative'
+            else:
+                subtype = 'mixed'
             if sys.version_info[0] < 3:  # PYTHON 2
-                msg = MIMEMultipart()
+                msg = MIMEMultipart(subtype)
             else:
                 try:
                     import email.policy
-
-                    msg = MIMEMultipart(policy=email.policy.SMTP)
+                    msg = MIMEMultipart(subtype, policy=email.policy.SMTP)
                 except:
-                    msg = MIMEMultipart()
+                    msg = MIMEMultipart(subtype)
             if self.SenderName == None or not len(self.SenderName):
-                msg["From"] = "<" + self.SenderAccount + ">"
+                parent["From"] = "<" + self.SenderAccount + ">"
             else:
-                msg["From"] = self.SenderName + " <" + self.SenderAccount + ">"
-                self.LogDebug(msg["From"])
+                parent["From"] = self.SenderName + " <" + self.SenderAccount + ">"
+                self.LogDebug(parent["From"])
+
+            parent.attach(msg)
         except Exception as e1:
             self.LogErrorLine("Error in email init: " + str(e1))
             return False
@@ -569,26 +613,24 @@ class MyMail(MySupport):
 
         try:
             if self.UseBCC:
-                msg["Bcc"] = recipient
+                parent["Bcc"] = recipient
             else:
-                msg["To"] = recipient
+                parent["To"] = recipient
 
-            msg["Date"] = formatdate(localtime=True)
-            msg["Subject"] = subjectstr
+            parent["Date"] = formatdate(localtime=True)
+            parent["Subject"] = subjectstr
 
-            body = (
-                "\r\n"
-                + "Time: "
-                + tmstamp
-                + "\r\n"
-                + "Date: "
-                + dtstamp
-                + "\r\n"
-                + msgstr
+            body = ("\r\n" + "Time: " + tmstamp + "\r\n" + 
+                    "Date: " + dtstamp + "\r\n"
+                    + msgstr
             )
+            if self.UseHTML:
+                html_message = MyMail.ConvertTextToHTML(body)
 
             if sys.version_info[0] < 3:  # PYTHON 2
                 msg.attach(MIMEText(body, "plain"))
+                if self.UseHTML:
+                    msg.attach(MIMEText(html_message, "html"))
             else:  # PYTHON 3
                 try:
                     msg.attach(
@@ -596,6 +638,12 @@ class MyMail(MySupport):
                             body, "plain", _charset="utf-8", policy=email.policy.SMTP
                         )
                     )
+                    if self.UseHTML:
+                        msg.attach(
+                            MIMEText(
+                                html_message, "html", _charset="utf-8", policy=email.policy.SMTP
+                            )
+                        )
                 except:
                     msg.attach(MIMEText(body, "plain"))
         except Exception as e1:
@@ -604,14 +652,17 @@ class MyMail(MySupport):
 
         # if the files are not found then we skip them but still send the email
         try:
+            from email import encoders
+            from email.mime.base import MIMEBase
             for f in files or []:
 
                 with open(f, "rb") as fil:
                     part = MIMEApplication(fil.read(), Name=basename(f))
-                    part[
-                        "Content-Disposition"
-                    ] = 'attachment; filename="%s"' % basename(f)
-                    msg.attach(part)
+                    part.add_header('Content-Disposition',
+                            'attachment',
+                            filename=basename(f))
+                    parent.attach(part)
+                    self.LogDebug("attachment: "  + basename(f))
 
                 if deletefile:
                     os.remove(f)
@@ -650,9 +701,9 @@ class MyMail(MySupport):
                 )
 
             if sys.version_info[0] < 3:  # PYTHON 2
-                message = msg.as_string()
+                message = parent.as_string()
             else:  # PYTHON 3
-                message = msg.as_bytes()
+                message = parent.as_bytes()
 
             if "," in recipient:
                 multiple_recipients = recipient.split(",")
@@ -667,7 +718,10 @@ class MyMail(MySupport):
                 )
         except Exception as e1:
             self.LogErrorLine("Error SMTP sendmail: " + str(e1))
-            session.quit()
+            try:
+                session.quit()
+            except:
+                pass
             return False
 
         session.quit()

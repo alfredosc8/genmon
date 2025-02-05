@@ -185,6 +185,10 @@ class GenCTHat(MySupport):
             self.debug = self.config.ReadValue("debug", return_type=bool, default=False)
 
             self.LogDebug("Multiplier: " + str(self.Multiplier))
+            
+            if self.MonitorAddress != None:
+                self.MonitorAddress = self.MonitorAddress.strip()
+
             if self.MonitorAddress == None or not len(self.MonitorAddress):
                 self.MonitorAddress = ProgramDefaults.LocalHost
 
@@ -308,6 +312,7 @@ class GenCTHat(MySupport):
                 data["current"] = CT1 + CT2
                 data["ctdata"] = [CT1, CT2]
                 data["powerfactor"] = self.powerfactor
+                data['from'] = "gencthat"
                 return_string = json.dumps(data)
                 self.Generator.ProcessMonitorCommand(
                     "generator: set_power_data=" + return_string

@@ -8,10 +8,14 @@
 # MODIFICATIONS:
 # -------------------------------------------------------------------------------
 
+# https://www.raspberrypi.com/documentation/computers/configuration.html#configuring-uarts
+
 import getopt
 import os
 import sys
+import re
 from shutil import copyfile
+import subprocess
 from subprocess import PIPE, Popen
 
 BOOT_CONFIG = "/boot/config.txt"
@@ -71,11 +75,9 @@ def AddItemToConfFile(FileName, Entry, Value, Check=False):
                             if Entry == strings or strings.lower().startswith(
                                 Entry + "="
                             ):  # is this our value?
-                                myitems = strings.split("=")
-                                if (
-                                    len(myitems) >= 2
-                                    and myitems[1].strip().lower() == Value
-                                ):
+                                valueindex = strings.find('=')
+                                myvalue = strings[valueindex+1:]
+                                if myvalue.lower() == Value:
                                     Found = True
                                 break
 
@@ -261,9 +263,44 @@ def DisableService(servicename, enable=False):
             + GetErrorInfo()
         )
         sys.exit(2)
+# ------------------FileContains------------------------------------------------
+def FileContains(filename, search_string):
 
+    if os.path.isfile(filename):
+        with open(filename) as f:
+            if search_string in f.read():
+                return True
+    return False
+# ------------------CheckFileLocations------------------------------------------
+def CheckFileLocations():
+    global BOOT_CONFIG
+    global CMD_LINE
+    global FileList
+    try:
 
-# ------------------RestoreFiles------------------------------------------------------
+        # check if /boot/config.txt or /boot/firmware/config.txt should be used
+        # check if /boot/comdline.txt or /boot/firmware/cmdline.txt should be used
+        if not os.path.isfile(BOOT_CONFIG):
+            BOOT_CONFIG = "/boot/firmware/config.txt"
+        else:
+            if FileContains(BOOT_CONFIG,"DO NOT EDIT"):
+                BOOT_CONFIG = "/boot/firmware/config.txt"
+        if not os.path.isfile(CMD_LINE):
+            CMD_LINE = "/boot/firmware/cmdline.txt"
+        else:
+            # it exist but should not be used.
+            if FileContains(CMD_LINE,"DO NOT EDIT"):
+                CMD_LINE = "/boot/firmware/cmdline.txt"
+        
+        FileList = []
+        FileList.append(BOOT_CONFIG)
+        FileList.append(CMD_LINE)
+        print("\nUsing files: " + BOOT_CONFIG + " and " + CMD_LINE) 
+
+    except Exception as e1:
+        print("Error checking for file locations: " + str(e1))
+
+# ------------------RestoreFiles------------------------------------------------
 def RestoreFiles():
 
     print("Restoring...")
@@ -283,6 +320,41 @@ def GetErrorInfo():
     lineno = exc_tb.tb_lineno
     return fname + ":" + str(lineno)
 
+# ------------ UseLegacySerialEnable -------------------------------------------
+def UseLegacySerialEnable():
+    try:
+        model = GetRaspberryPiModel()
+
+        if model == None:
+            return True 
+        
+        PiMajorVersion = re.search(r'\d+', model).group()
+        if int(PiMajorVersion) >= 5:
+            return False
+        return True
+    except Exception as e1:
+        print("Error in UseLegacySerialEnable: " + GetErrorInfo())
+        return False
+# ------------ IsPlatformRaspberryPi -------------------------------------------
+def IsPlatformRaspberryPi():
+    try: 
+        model = GetRaspberryPiModel()
+        if model != None and "raspberry" in model.lower():
+            return True 
+        return False
+    except Exception as e1:
+        print("Error in IsPlatformRaspberryPi: " + GetErrorInfo())
+        return False
+# ------------ GetRaspberryPiModel ---------------------------------------------
+def GetRaspberryPiModel():
+    try:    
+        process = Popen(["cat", "/proc/device-tree/model"], stdout=PIPE)
+        output, _error = process.communicate()
+        if sys.version_info[0] >= 3:
+            output = output.decode("utf-8")
+        return str(output.rstrip("\x00"))
+    except Exception as e1:
+        return None
 
 # ------------------main---------------------------------------------------------
 if __name__ == "__main__":
@@ -294,6 +366,7 @@ if __name__ == "__main__":
     HelpStr += "\n      -r  Restore modified files"
     HelpStr += "\n      -c  Check status of serial port"
     HelpStr += "\n      -b  Leave Bluetooth enabled (Pi 3 and 4 only)"
+    HelpStr += "\n      -d  Disable Bluetooth (may be needed on some pi models), default"
     HelpStr += "\n \n"
 
     try:
@@ -319,6 +392,8 @@ if __name__ == "__main__":
             Check = True
         elif opt in ("-b", "--bluetooth"):
             Bluetooth = True
+        elif opt in ("-d", "--disablebluetooth"):
+            Bluetooth = False
 
     if Check and Enable or Check and Restore or Enable and Restore:
         print("\nOnly one option can be selected.")
@@ -335,10 +410,22 @@ if __name__ == "__main__":
         )
         sys.exit(2)
 
+    if not IsPlatformRaspberryPi():
+        print("Expecting a Raspberry Pi platform. Pi not detected. Exiting.")
+        sys.exit(2)
+
+    CheckFileLocations()
+
     for File in FileList:
         if not os.path.isfile(File):
             print("Error: unable to find file " + File)
             sys.exit(2)
+
+    bUseLegacy = UseLegacySerialEnable()
+    if not bUseLegacy:
+        Bluetooth = False
+
+    print("\nModel: " + GetRaspberryPiModel())
 
     if Restore:
         if RestoreFiles():
@@ -370,7 +457,7 @@ if __name__ == "__main__":
                 ],
                 "Disable BT Disable Overlay": [
                     RemoveItemFromConfFile,
-                    (BOOT_CONFIG, "dtoverlay", "pi3-disable-bt", False),
+                    (BOOT_CONFIG, "dtoverlay", "disable-bt", False),
                 ],
                 "Disable serial console": [
                     ProcessCmdLineFile,
@@ -401,7 +488,7 @@ if __name__ == "__main__":
                 ],
                 "Checking : Disable BT Disable Overlay": [
                     RemoveItemFromConfFile,
-                    (BOOT_CONFIG, "dtoverlay", "pi3-disable-bt", True),
+                    (BOOT_CONFIG, "dtoverlay", "disable-bt", True),
                 ],
                 "Checking : Serial console command line removed": [
                     ProcessCmdLineFile,
@@ -417,49 +504,67 @@ if __name__ == "__main__":
                 ],
             }
         else:
-            EnableDict = {
-                "Enable UART": [
-                    AddItemToConfFile,
-                    (BOOT_CONFIG, "enable_uart", "1", False),
-                ],
-                "Disable BT": [
-                    AddItemToConfFile,
-                    (BOOT_CONFIG, "dtoverlay", "pi3-disable-bt", False),
-                ],
-                "Disable serial console": [
-                    ProcessCmdLineFile,
-                    (CMD_LINE, CMD_LINE_SERIAL_CONSOLE, False),
-                ],
-                "Disable serial console service": [
-                    DisableService,
-                    (GETTY_SERVICE_NAME,),
-                ],
-                "Disable BT service service": [DisableService, (HCIUART_SERVIE_NAME,)],
-            }
+            if bUseLegacy:
+                EnableDict = {
+                    "Enable UART": [
+                        AddItemToConfFile,
+                        (BOOT_CONFIG, "enable_uart", "1", False),
+                    ],
+                    "Change BT serial port": [
+                        AddItemToConfFile,
+                        (BOOT_CONFIG, "dtoverlay", "miniuart-bt", False),
+                    ],
+                    "Disable BT": [
+                        AddItemToConfFile,
+                        (BOOT_CONFIG, "dtoverlay", "disable-bt", False),
+                    ],
+                    "Disable serial console": [
+                        ProcessCmdLineFile,
+                        (CMD_LINE, CMD_LINE_SERIAL_CONSOLE, False),
+                    ],
+                    "Disable serial console service": [
+                        DisableService,
+                        (GETTY_SERVICE_NAME,),
+                    ],
+                    "Disable BT service service": [DisableService, (HCIUART_SERVIE_NAME,)],
+                }
 
-            CheckDict = {
-                "Checking : Is enable UART in boot config": [
-                    AddItemToConfFile,
-                    (BOOT_CONFIG, "enable_uart", "1", True),
-                ],
-                "Checking : Is BT overlay disabled": [
-                    AddItemToConfFile,
-                    (BOOT_CONFIG, "dtoverlay", "pi3-disable-bt", True),
-                ],
-                "Checking : Serial console command line removed": [
-                    ProcessCmdLineFile,
-                    (CMD_LINE, CMD_LINE_SERIAL_CONSOLE, True),
-                ],
-                "Checking : Serial console service disabled": [
-                    ServiceIsDisabled,
-                    (GETTY_SERVICE_NAME,),
-                ],
-                "Checking : BT service disabled": [
-                    ServiceIsDisabled,
-                    (HCIUART_SERVIE_NAME,),
-                ],
-            }
+                CheckDict = {
+                    "Checking : Is enable UART in boot config": [
+                        AddItemToConfFile,
+                        (BOOT_CONFIG, "enable_uart", "1", True),
+                    ],
+                    "Checking : Is BT overlay disabled": [
+                        AddItemToConfFile,
+                        (BOOT_CONFIG, "dtoverlay", "disable-bt", True),
+                    ],
+                    "Checking : Serial console command line removed": [
+                        ProcessCmdLineFile,
+                        (CMD_LINE, CMD_LINE_SERIAL_CONSOLE, True),
+                    ],
+                    "Checking : Serial console service disabled": [
+                        ServiceIsDisabled,
+                        (GETTY_SERVICE_NAME,),
+                    ],
+                    "Checking : BT service disabled": [
+                        ServiceIsDisabled,
+                        (HCIUART_SERVIE_NAME,),
+                    ],
+                }
+            else: # not not use legacy
+                EnableDict = {
+                    "Enable UART": [
+                        AddItemToConfFile,
+                        (BOOT_CONFIG, "dtparam", "uart0=on", False),
+                    ]
+                }
 
+                CheckDict = {
+                    "Checking : Is enable UART in boot config": [
+                        AddItemToConfFile,
+                        (BOOT_CONFIG, "dtparam", "uart0=on", True),
+                    ],
+                }
         if Check:
             Lookup = CheckDict
         else:

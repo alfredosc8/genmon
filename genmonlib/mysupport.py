@@ -16,6 +16,7 @@ import socket
 import sys
 import threading
 import time
+import re
 
 from genmonlib.mycommon import MyCommon
 from genmonlib.myconfig import MyConfig
@@ -112,7 +113,7 @@ class MySupport(MyCommon):
             return False
 
     # ------------ MySupport::GetPlatformStats ----------------------------------
-    def GetPlatformStats(self, usemetric=None):
+    def GetPlatformStats(self, usemetric=None, JSONNum=False):
 
         if not usemetric == None:
             bMetric = usemetric
@@ -120,8 +121,15 @@ class MySupport(MyCommon):
             bMetric = self.UseMetric
         Platform = MyPlatform(self.log, bMetric)
 
-        return Platform.GetInfo()
+        return Platform.GetInfo(JSONNum=JSONNum)
 
+    # ----------  MySupport::RegExIsValid---------------------------------
+    def RegExIsValid(self, input_str):
+        try:
+            re.compile(input_str)
+            return True
+        except Exception as e1:
+            return False
     # ---------- MySupport::InternetConnected------------------------------------
     # Note: this function, if the internet connection is not present could
     # take some time to complete due to the network timeout

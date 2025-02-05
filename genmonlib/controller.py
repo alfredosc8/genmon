@@ -69,11 +69,11 @@ class GeneratorController(MySupport):
         self.CheckForAlarmEvent = (
             threading.Event()
         )  # Event to signal checking for alarm
-        self.Registers = collections.OrderedDict()  # dict for registers and values
-        self.Strings = (
-            collections.OrderedDict()
-        )  # dict for registers read a string data
-        self.FileData = collections.OrderedDict()  # dict for modbus file reads
+        self.Holding = collections.OrderedDict()  # dict for registers and values (modbus fuction 03)
+        self.Strings = collections.OrderedDict()    # dict for registers read a string data
+        self.FileData = collections.OrderedDict()   # dict for modbus file reads (modbus function 0x14)
+        self.Coils = collections.OrderedDict()      # dict for modbus coil reads (modbus fuction 01)
+        self.Inputs = collections.OrderedDict()     # dict for modbus input registers (modbus function 4)
         self.NotChanged = 0  # stats for registers
         self.Changed = 0  # stats for registers
         self.TotalChanged = 0.0  # ratio of changed ragisters
@@ -84,6 +84,7 @@ class GeneratorController(MySupport):
         self.MinimumOutageDuration = 0
         self.PowerLogMaxSize = 15.0  # 15 MB max size
         self.PowerLog = os.path.join(ConfigFilePath, "kwlog.txt")
+        self.MaxPowerLogEntries = 4000
         self.FuelLog = os.path.join(ConfigFilePath, "fuellog.txt")
         self.FuelLock = threading.RLock()
         self.PowerLogList = []
@@ -94,7 +95,6 @@ class GeneratorController(MySupport):
         self.RunHoursMonth = None
         self.RunHoursYear = None
         self.FuelTotal = None
-        self.LastHouseKeepingTime = None
         self.TileList = []  # Tile list for GUI
         self.TankData = None
         self.FuelLevelOK = None  # used in mynotify.py
@@ -120,19 +120,19 @@ class GeneratorController(MySupport):
         self.UseExternalFuelData = False
         self.UseExternalCTData = False
         self.ExternalCTData = None
-        self.UseExternalTempData = False
+        self.UseExternalSensorData = False
+        self.ExternalSensorData = None
+        self.ExternalSensorDataTime = None
+        self.ExternalSensorGagueData = None
         self.ExternalDataLock = threading.RLock()
-        self.ExternalTempData = None
-        self.ExternalTempDataTime = None
-        self.ExternalTempBounds = None
 
-        self.ProgramStartTime = datetime.datetime.now()  # used for com metrics
-        self.OutageStartTime = (
-            self.ProgramStartTime
-        )  # if these two are the same, no outage has occured
+        self.ProgramStartTime = datetime.datetime.now() # used for com metrics
+        self.OutageStartTime = (self.ProgramStartTime)  # if these two are the same, no outage has occured
+        self.OutageReoccuringNoticeTime = (self.ProgramStartTime)
         self.OutageNoticeDelayTime = None
         self.LastOutageDuration = self.OutageStartTime - self.OutageStartTime
         self.OutageNoticeDelay = 0
+        self.Buttons = []   # UI command buttons (loaded after controller ID, if any)
 
         try:
 
@@ -215,6 +215,9 @@ class GeneratorController(MySupport):
                 self.PowerLogMaxSize = self.config.ReadValue(
                     "kwlogmax", return_type=float, default=15.0
                 )
+                self.MaxPowerLogEntries = self.config.ReadValue(
+                    "max_powerlog_entries", return_type=int, default=4000
+                )
 
                 if self.config.HasOption("nominalfrequency"):
                     self.NominalFreq = self.config.ReadValue("nominalfrequency")
@@ -232,6 +235,8 @@ class GeneratorController(MySupport):
                     self.Model = self.config.ReadValue("model")
                 
                 self.NominalLineVolts = self.config.ReadValue("nominallinevolts", return_type=int, default=240)
+
+                self.Phase = self.config.ReadValue("phase", return_type=int, default=1)
 
                 if self.config.HasOption("controllertype"):
                     self.ControllerSelected = self.config.ReadValue("controllertype")
@@ -258,6 +263,13 @@ class GeneratorController(MySupport):
                     "alternate_date_format", return_type=bool, default=False
                 )
 
+                # num minutes to send a warning email about an outage
+                self.OutageNoticeInterval = self.config.ReadValue("outage_notice_interval", return_type=int, default=0)
+
+                # the percentage of the total load of the allowable difference in current between legs
+                self.UnbalancedCapacity = self.config.ReadValue(
+                    "unbalanced_capacity", return_type=float, default=0
+                )
                 if self.bDisablePlatformStats:
                     self.bUseRaspberryPiCpuTempGauge = False
                     self.bUseLinuxWifiSignalGauge = False
@@ -268,13 +280,16 @@ class GeneratorController(MySupport):
                     self.bUseLinuxWifiSignalGauge = self.config.ReadValue(
                         "uselinuxwifisignalgauge", return_type=bool, default=True
                     )
-
         except Exception as e1:
             self.FatalError("Missing config file or config file entries: " + str(e1))
 
         try:
             if not self.bDisablePlatformStats:
-                self.Platform = MyPlatform(self.log, self.UseMetric)
+                self.Platform = MyPlatform(log=self.log, usemetric=self.UseMetric, debug = self.debug)
+                if self.Platform.GetRaspberryPiTemp(ReturnFloat=True) == 0.0:
+                    self.LogError("CPU Temp not supported.")
+                    self.bUseRaspberryPiCpuTempGauge = False
+                    # CPU temp is not supported on this platform
             else:
                 self.Platform = None
         except Exception as e1:
@@ -297,6 +312,9 @@ class GeneratorController(MySupport):
 
         # start thread for kw log
         self.Threads["PowerMeter"] = MyThread(self.PowerMeter, Name="PowerMeter")
+
+        self.Threads["MaintenanceHouseKeepingThread"] = MyThread(
+            self.MaintenanceHouseKeepingThread, Name="MaintenanceHouseKeepingThread")
 
         if self.UseFuelLog:
             self.Threads["FuelLogger"] = MyThread(self.FuelLogger, Name="FuelLogger")
@@ -347,8 +365,9 @@ class GeneratorController(MySupport):
 
                     try:
                         if self.PowerMeterIsSupported() and self.FuelConsumptionSupported():
-                            if self.LastOutageDuration.total_seconds():
-                                FuelUsed = self.GetPowerHistory("power_log_json=%d,fuel" % self.LastOutageDuration.total_seconds())
+                            if (int(self.LastOutageDuration.total_seconds()) > 0):
+                                # calling getpowerhistory with a duration of zero returns total fuel used so don't do that
+                                FuelUsed = self.GetPowerHistory("power_log_json=%d,fuel" % int(self.LastOutageDuration.total_seconds()))
                             else:
                                 # Outage of zero seconds...
                                 if self.UseMetric:
@@ -360,13 +379,16 @@ class GeneratorController(MySupport):
                     except Exception as e1:
                         self.LogErrorLine("Error recording fuel usage for outage: " + str(e1))
                     # log outage to file
-                    if (self.LastOutageDuration.total_seconds()> self.MinimumOutageDuration):
+                    if (int(self.LastOutageDuration.total_seconds())> self.MinimumOutageDuration):
                         self.LogToFile(self.OutageLog, self.OutageStartTime.strftime("%Y-%m-%d %H:%M:%S"),OutageStr,)
+                else:
+                    self.SendRecuringOutageNotice()
             else:
                 if UtilityVolts < ThresholdVoltage:
                     if self.CheckOutageNoticeDelay():
                         self.SystemInOutage = True
                         self.OutageStartTime = datetime.datetime.now()
+                        self.OutageReoccuringNoticeTime = datetime.datetime.now()
                         msgbody = ("\nUtility Power Out at "+ self.OutageStartTime.strftime("%Y-%m-%d %H:%M:%S"))
                         self.MessagePipe.SendMessage("Outage Notice at " + self.SiteName,msgbody,msgtype="outage",)
                 else:
@@ -375,6 +397,27 @@ class GeneratorController(MySupport):
             self.LogErrorLine("Error in CheckForOutageCommon: " + str(e1))
             return
 
+    # ------------ GeneratorController:SendRecuringOutageNotice ----------------
+    def SendRecuringOutageNotice(self):
+        try:
+            if not self.SystemInOutage:
+                return 
+            if self.OutageNoticeInterval < 1:
+                return 
+            
+            LastOutageDuration = (datetime.datetime.now() - self.OutageStartTime)
+            if LastOutageDuration.total_seconds() <= self.MinimumOutageDuration:
+                return
+
+            if (datetime.datetime.now() - self.OutageReoccuringNoticeTime).total_seconds() / 60 < self.OutageNoticeInterval:
+                return
+            self.OutageReoccuringNoticeTime = datetime.datetime.now()
+            OutageStr = str(LastOutageDuration).split(".")[0]      # remove microseconds from string
+            msgbody = ("\nUtility Outage Status: Untility power still out at " + datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S") + ". Duration of outage " + OutageStr)
+            self.MessagePipe.SendMessage("Recurring Outage Notice at " + self.SiteName,msgbody,msgtype="outage")
+        except Exception as e1:
+            self.LogErrorLine("Error in SendRecuringOutageNotice: " + str(e1))
+            return
     # ------------ GeneratorController:CheckOutageNoticeDelay ------------------
     def CheckOutageNoticeDelay(self):
 
@@ -480,6 +523,10 @@ class GeneratorController(MySupport):
 
                 FuelValue = self.GetFuelLevel(ReturnFloat=True)
 
+                if FuelValue == None:
+                    if self.WaitForExit("FuelLogger", self.FuelLogFrequency * 60.0):
+                        return
+                    continue
                 if FuelValue == LastFuelValue:
                     continue
 
@@ -648,15 +695,41 @@ class GeneratorController(MySupport):
         return StringValue
 
     # ------------ GeneratorController:GetRegisterValueFromList -----------------
-    def GetRegisterValueFromList(self, Register):
-
-        return self.Registers.get(Register, "")
-
-    # -------------GeneratorController:GetParameterBit---------------------------
-    def GetParameterBit(self, Register, Mask, OnLabel=None, OffLabel=None):
+    def GetRegisterValueFromList(self, Register, IsCoil = False, IsInput = False):
 
         try:
-            Value = self.GetRegisterValueFromList(Register)
+            if IsCoil:
+                return self.Coils.get(Register, "")
+            if IsInput:
+                return self.Inputs.get(Register, "")
+            return self.Holding.get(Register, "")
+        except Exception as e1:
+            self.LogErrorLine("Error in GetRegisterValueFromList: " + str(e1))
+            return ""
+
+    # -------------GeneratorController:GetCoil-----------------------------------
+    def GetCoil(self, Register,OnLabel=None, OffLabel=None):
+
+        try:
+            if OnLabel != None and OffLabel != None:
+                DefaultReturn = False
+            else:
+                DefaultReturn =  OffLabel
+            value = self.GetParameterBit(Register, 0x01, OnLabel = OnLabel, OffLabel = OffLabel, IsCoil = True)
+            if OnLabel != None and OffLabel != None:
+                return value 
+            if value == 1:
+                return True 
+            return False
+        except Exception as e1:
+            self.LogErrorLine("Error in GetCoil: " + str(e1))
+            return DefaultReturn
+
+    # -------------GeneratorController:GetParameterBit---------------------------
+    def GetParameterBit(self, Register, Mask, OnLabel=None, OffLabel=None, IsCoil = False, IsInput = False):
+
+        try:
+            Value = self.GetRegisterValueFromList(Register, IsCoil = IsCoil, IsInput = IsInput)
             if not len(Value):
                 return ""
 
@@ -681,6 +754,8 @@ class GeneratorController(MySupport):
         Divider=None,
         ReturnInt=False,
         ReturnFloat=False,
+        IsCoil = False, 
+        IsInput = False
     ):
 
         try:
@@ -696,8 +771,8 @@ class GeneratorController(MySupport):
             else:
                 LabelStr = ""
 
-            ValueLo = self.GetParameter(RegisterLo)
-            ValueHi = self.GetParameter(RegisterHi)
+            ValueLo = self.GetParameter(RegisterLo, IsCoil = IsCoil, IsInput = IsInput)
+            ValueHi = self.GetParameter(RegisterHi, IsCoil = IsCoil, IsInput = IsInput)
 
             if not len(ValueLo) or not len(ValueHi):
                 return DefaultReturn
@@ -717,7 +792,7 @@ class GeneratorController(MySupport):
                 return "%2.1f %s" % (FloatValue, LabelStr)
             return "%d %s" % (IntValue, LabelStr)
         except Exception as e1:
-            self.LogErrorLine("Error in GetParameterBit: " + str(e1))
+            self.LogErrorLine("Error in GetParameterLong: " + str(e1))
             return DefaultReturn
 
     # -------------GeneratorController:GetParameter------------------------------
@@ -731,7 +806,9 @@ class GeneratorController(MySupport):
         Hex=False,
         ReturnInt=False,
         ReturnFloat=False,
-        ReturnString=False
+        ReturnString=False,
+        IsCoil = False,
+        IsInput = False
     ):
 
         try:
@@ -742,7 +819,7 @@ class GeneratorController(MySupport):
             else:
                 DefaultReturn = ""
 
-            Value = self.GetRegisterValueFromList(Register)
+            Value = self.GetRegisterValueFromList(Register, IsCoil = IsCoil, IsInput = IsInput)
             if not len(Value):
                 return DefaultReturn
 
@@ -800,7 +877,7 @@ class GeneratorController(MySupport):
             ValidInput = False
             EntryString = CommandString
             if EntryString == None or not len(EntryString):
-                return "Invalid input for SetCommandButton entry."
+                return "Error: Invalid input for Set Button Command entry."
 
             EntryString = EntryString.strip()
             if EntryString.startswith("set_button_command"):
@@ -816,20 +893,104 @@ class GeneratorController(MySupport):
                     CommandSetList = json.loads(EntryString)
                     # validate object
                     if not isinstance(CommandSetList, list) and not (len(CommandSetList) == 0):
-                        return "Invalid set button object"
+                        self.LogError("Invalid button object in SetCommandButton")
+                        return "Error: Invalid button object"
                     # Execute Command
                     return self.ExecuteRemoteCommand(CommandSetList)
                 except Exception as e1:
                     self.LogErrorLine("Error in SetCommandButton: " + str(e1))
-                    return "Invalid input for SetCommandButton (2)"
+                    return "Error: Invalid input for SetCommandButton (2), see error log."
             else:
                 self.LogError("Error in SetCommandButton: invalid input: " + str(CommandString))
-                return "Invalid input for SetButton (3)."
+                return "Error: Invalid input for SetCommandButton (3)."
             return "OK"
         except Exception as e1:
             self.LogErrorLine("Error in SetCommandButton: " + str(e1))
-            return "Error in SetCommandButton"
+            return "Error in SetCommandButton, see error log."
         return "OK"
+
+     # -------------Controller:GetButtons---------------------------------------
+    def GetButtons(self, singlebuttonname = None):
+        try:
+
+            if len(self.Buttons) < 1:
+                return []
+            button_list = self.Buttons
+            button_list = self.GetButtonsCommon(button_list, singlebuttonname=singlebuttonname)
+            return button_list
+        except Exception as e1:
+            self.LogErrorLine("Error in GetButtons: " + str(e1))
+            return []
+        
+    # ----------  Controller::GetButtonsCommon----------------------------------
+    def GetButtonsCommon(self, button_list, singlebuttonname = None):
+        try:
+            if button_list == None:
+                return []
+            if not isinstance(button_list, list):
+                self.LogError("Error in GetButtonsCommon: invalid input or data: "+ str(type(button_list)))
+                return []
+
+            # Validate buttons before sending to the web app
+            return_buttons = []
+            for button in button_list:
+                
+                if not "onewordcommand" in button.keys():
+                    self.LogError("Error in GetButtonsCommon: button must have onewordcommand element: "+ str(button))
+                    continue
+                elif not isinstance(button["onewordcommand"], str):
+                    self.LogError("Error in GetButtonsCommon: invalid button defined validateing onewordcommand (non string): "+ str(button))
+                    continue
+                if not "title" in button.keys():
+                    self.LogError("Error in GetButtonsCommon: button must have title element: "+ str(button))
+                    continue
+                elif not isinstance(button["title"], str):
+                    self.LogError("Error in GetButtonsCommon: invalid button defined validateing title (not string): "+ str(button))
+                    continue
+                if not "command_sequence" in button.keys():
+                    self.LogError("Error in GetButtonsCommon: button must have command_sequence element: "+ str(button))
+                    continue
+                elif not isinstance(button["command_sequence"], list):
+                    self.LogError("Error in GetButtonsCommon: invalid button defined validateing command_sequence:(not list) "+ str(button))
+                    continue
+                
+                # valiate command sequeuence
+                CommandError = False
+                for command in button["command_sequence"]:
+                    if not "reg" in command.keys() or not isinstance(command["reg"], str):
+                        self.LogError("Error in GetButtonsCommon: invalid command string defined validateing reg: "+ str(button))
+                        CommandError = True
+                        break
+                    if not "value" in command.keys():
+                        # this command requires input from the web app, let's validate the params
+                        # "input_title", "type" is required. "length" is default 2 but must be a multiple of 2
+                        if not "input_title" in command.keys() or not "type" in command.keys():
+                            self.LogError("Error in GetButtonsCommon: Error validateing input_title and type: "+ str(button))
+                            CommandError = True
+                            break
+                        if "length" in command.keys():
+                            if(int(command["length"]) % 2 != 0):
+                                self.LogError("Error in GetButtonsCommon: length of command_sequence input must be a multiple of 2: " + str(button))
+                                CommandError = True
+                                break
+                        if "bounds_regex" in command.keys():
+                            if not self.RegExIsValid(command["bounds_regex"]):
+                                self.LogError("Error in GetButtonsCommon: invalid regular expression for bounds_regex in command_sequence: " + str(button))
+                                CommandError = True
+                                break
+                if CommandError:
+                    continue
+
+                if singlebuttonname != None and singlebuttonname == button["onewordcommand"]:
+                    return button
+
+                return_buttons.append(button)
+
+            return return_buttons
+        except Exception as e1:
+            self.LogErrorLine("Error in GetButtonsCommon: " + str(e1))
+            return []
+
     # -------------CustomController:ExecuteRemoteCommand-------------------------
     def ExecuteRemoteCommand(self, CommandSetList):
         # CommandSetList is a list of dicts, each dict is a command to execute 
@@ -851,7 +1012,7 @@ class GeneratorController(MySupport):
                     if not "onewordcommand" in button_command.keys():
                         self.LogError("Error on ExecuteRemoteCommand, invalid dict: " + str(button_command))
                         return "Error: invalid input in ExecuteRemoteCommand (2)"
-                    # make a copy of the dict so we can add the input without modifying the origianl
+                    # make a copy of the dict so we can add the input without modifying the original
                     returndict = self.GetButtons(singlebuttonname = button_command["onewordcommand"])
                     if returndict == None:
                         self.LogError("Error on ExecuteRemoteCommand, command not found: " + str(button_command))
@@ -862,7 +1023,7 @@ class GeneratorController(MySupport):
                         return "Error: invalid command in ExecuteRemoteCommand (2)"
                     
                     # selected_command from genmon, button_command from UI
-                    if not "command_sequence" in selected_command or not "command_sequence" in button_command:
+                    if not "command_sequence" in selected_command.keys() or not "command_sequence" in button_command.keys():
                         self.LogError("Error on ExecuteRemoteCommand, command sequence mismatch: " + str(button_command))
                         return "Error on ExecuteRemoteCommand, command sequence mismatch"
                     if not (len(selected_command["command_sequence"]) == len(button_command["command_sequence"])):
@@ -870,13 +1031,13 @@ class GeneratorController(MySupport):
                         return "Error on ExecuteRemoteCommand, command sequence mismatch (2)"
                     # iterate thru both lists of commands
                     for gm_cmd, ui_cmd in zip(selected_command["command_sequence"], button_command["command_sequence"]):
-                        if "input_title" in gm_cmd and "value" in ui_cmd:
-                            if "bounds_regex" in gm_cmd:
+                        if "input_title" in gm_cmd.keys() and "value" in ui_cmd.keys():
+                            if "bounds_regex" in gm_cmd.keys():
                                 if not re.match(gm_cmd["bounds_regex"], str(ui_cmd["value"])):
                                     self.LogError("Error in ExecuteRemoteCommand: Failed bounds check: " + str(ui_cmd))
                                     return "Error in ExecuteRemoteCommand: Failed bounds check"
-                            if "type" in gm_cmd and gm_cmd["type"] == "int":
-                                if not "length" in gm_cmd or ("length" in gm_cmd and gm_cmd["length"] == 2):
+                            if "type" in gm_cmd.keys() and gm_cmd["type"] == "int":
+                                if not "length" in gm_cmd.keys() or ("length" in gm_cmd.keys() and gm_cmd["length"] == 2):
                                     gm_cmd["value"] = "%04x" % int(ui_cmd["value"])
                                 elif "length" in gm_cmd and gm_cmd["length"] == 4:
                                     gm_cmd["value"] = "%08x" % int(ui_cmd["value"])
@@ -886,13 +1047,13 @@ class GeneratorController(MySupport):
                             else:
                                 self.LogError("Error in ExecuteRemoteCommand, unsupported type: " + str(ui_cmd))
                                 return "Error in ExecuteRemoteCommand, unsupported type"
-                        elif not "reg" in gm_cmd or not "value" in gm_cmd:
+                        elif not "reg" in gm_cmd.keys() or not "value" in gm_cmd.keys():
                             self.LogError("Error in ExecuteRemoteCommand, invalid command in sequence: " + str(selected_command))
+                            self.LogDebug(str(button_command))
                             return "Error in ExecuteRemoteCommand, invalid command in sequence"
                     # execute the command selected_command
                     return self.ExecuteCommandSequence(selected_command["command_sequence"])
 
-            # TODO parse button
         except Exception as e1:
             self.LogErrorLine("Error in ExecuteRemoteCommand: " + str(e1))
             self.LogDebug(str(CommandSetList))
@@ -903,12 +1064,15 @@ class GeneratorController(MySupport):
         try:
             with self.ModBus.CommAccessLock:
                 for command in command_sequence:
-                    if not len(command["value"]):
-                        self.LogDebug("Error in SetGeneratorRemoteCommand: invalid value array")
+                    if not "reg" in command.keys():
+                        self.LogDebug("Error in ExecuteCommandSequence: invalid value array, no 'reg' in command_sequence command: " + str(command))
+                        continue
+                    if not isinstance(command["value"],int) and not len(command["value"]):
+                        self.LogDebug("Error in ExecuteCommandSequence: invalid value array")
                         continue
                     if isinstance(command["value"], list):
                         if not (len(command["value"]) % 2) == 0:
-                            self.LogDebug("Error in SetGeneratorRemoteCommand: invalid value length")
+                            self.LogDebug("Error in ExecuteCommandSequence: invalid value length")
                             return "Command not found."
                         Data = []
                         for item in command["value"]:
@@ -917,51 +1081,41 @@ class GeneratorController(MySupport):
                             elif isinstance(item, int):
                                 Data.append(item)
                             else:
-                                self.LogDebug("Error in SetGeneratorRemoteCommand: invalid type if value list")
+                                self.LogDebug("Error in ExecuteCommandSequence: invalid type if value list")
                                 return "Command not found."
-                        self.LogDebug("Write: " + command["reg"] + ": " + str(Data))
+                        self.LogDebug("Write List: len: " + str(int(len(Data)  / 2)) + " : "  + self.LogHexList(Data, prefix=command["reg"], nolog = True))
                         self.ModBus.ProcessWriteTransaction(command["reg"], len(Data) / 2, Data)
 
                     elif isinstance(command["value"], str):
+                        # only supports single word writes
                         value = int(command["value"], 16)
                         LowByte = value & 0x00FF
-                        HighByte = value >> 8
+                        HighByte = (value >> 8) & 0x00ff
                         Data = []
-                        Data.append(HighByte)  # Value for indexed register (High byte)
-                        Data.append(LowByte)  # Value for indexed register (Low byte)
-                        self.LogDebug("Write: " + command["reg"] + ": "+ ("%x %x" % (HighByte, LowByte)))
+                        Data.append(HighByte)  
+                        Data.append(LowByte)  
+                        self.LogDebug("Write Str: len: "+ str(int(len(Data)  / 2)) + " : " + command["reg"] + ": "+ ("%04x %04x" % (HighByte, LowByte)))
                         self.ModBus.ProcessWriteTransaction(command["reg"], len(Data) / 2, Data)
                     elif isinstance(command["value"], int):
+                        # only supports single word writes
                         value = command["value"]
                         LowByte = value & 0x00FF
-                        HighByte = value >> 8
+                        HighByte = (value >> 8) & 0x00ff
                         Data = []
-                        Data.append(HighByte)  # Value for indexed register (High byte)
-                        Data.append(LowByte)  # Value for indexed register (Low byte)
-                        self.LogDebug("Write: "+ command["reg"]+ ": "+ ("%x %x" % (HighByte, LowByte)))
+                        Data.append(HighByte)  
+                        Data.append(LowByte)  
+                        self.LogDebug("Write Int: len: "+ str(int(len(Data)  / 2)) + " : " + command["reg"]+ ": "+ ("%04x %04x" % (HighByte, LowByte)))
                         self.ModBus.ProcessWriteTransaction(command["reg"], len(Data) / 2, Data)
                     else:
-                        self.LogDebug("Error in SetGeneratorRemoteCommand: invalid value type")
+                        self.LogDebug("Error in ExecuteCommandSequence: invalid value type")
                         return "Command not found."
 
-                return "Remote command sent successfully"
+                return "OK"
         except Exception as e1:
             self.LogErrorLine("Error in ExecuteCommandSequence: " + str(e1))
             self.LogDebug(str(command_sequence))
             return "Error in ExecuteCommandSequence"
         return "OK"
-    # -------------CustomController:GetButtons-----------------------------------
-    def GetButtons(self, singlebuttonname = None):
-        try:
-            if not singlebuttonname == None:
-                # get full single command
-                return {}
-            else:
-                # get full simplified list for GUI
-                return {}
-        except Exception as e1:
-            self.LogErrorLine("Error in SetButton: " + str(e1))
-            return {}
     # ------------ GeneratorController::GetStartInfo ----------------------------
     # return a dictionary with startup info for the gui
     def GetStartInfo(self, NoTile=False):
@@ -1515,6 +1669,7 @@ class GeneratorController(MySupport):
     # ------------ GeneratorController::ReducePowerSamples-----------------------
     def ReducePowerSamples(self, PowerList, MaxSize):
 
+
         if MaxSize == 0:
             self.LogError("RecducePowerSamples: Error: Max size is zero")
             return []
@@ -1524,18 +1679,9 @@ class GeneratorController(MySupport):
             return PowerList
 
         try:
-            Sample = int(len(PowerList) / MaxSize)
-            Remain = int(len(PowerList) % MaxSize)
-
-            NewList = []
-            Count = 0
-            for Count in range(len(PowerList)):
-                TimeStamp, KWValue = PowerList[Count]
-                if float(KWValue) == 0:
-                    NewList.append([TimeStamp, KWValue])
-                elif Count % Sample == 0:
-                    NewList.append([TimeStamp, KWValue])
-
+            # reduce to only the last 31 days
+            NewList = self.GetPowerLogForMinutes(60 * 24 * 31, InputList=PowerList)
+            
             # if we have too many entries due to a remainder or not removing zero samples, then delete some
             if len(NewList) > MaxSize:
                 return self.RemovePowerSamples(NewList, MaxSize)
@@ -1548,25 +1694,11 @@ class GeneratorController(MySupport):
     # ------------ GeneratorController::RemovePowerSamples-----------------------
     def RemovePowerSamples(self, List, MaxSize):
 
-        import random
-
         try:
             NewList = List[:]
             if len(NewList) <= MaxSize:
                 self.LogError("RemovePowerSamples: Error: Can't remove ")
                 return NewList
-
-            Extra = len(NewList) - MaxSize
-            for Count in range(Extra):
-                # assume first and last sampels are zero samples so don't select thoes
-                repeat = True
-                removeAttempt = 0  # only try this so many times
-                while repeat and removeAttempt < MaxSize:
-                    removeAttempt += 1
-                    position = random.randint(1, len(NewList) - 2)
-                    if float(NewList[position][1]) != 0:
-                        Entry = NewList.pop(position)
-                        repeat = False
 
             # This will just remove all samples but the first MaxSize. This will only do anything if the above
             # code failes to find valid samples to remove (i.e. all samples are zero)
@@ -1578,10 +1710,13 @@ class GeneratorController(MySupport):
             return NewList
 
     # ------------ GeneratorController::GetPowerLogForMinutes--------------------
-    def GetPowerLogForMinutes(self, Minutes=0):
+    def GetPowerLogForMinutes(self, Minutes=0, InputList = None):
         try:
             ReturnList = []
-            PowerList = self.ReadPowerLogFromFile()
+            if InputList == None:
+                PowerList = self.ReadPowerLogFromFile()
+            else:
+                PowerList = InputList
             if not Minutes:
                 return PowerList
             CurrentTime = datetime.datetime.now()
@@ -1589,9 +1724,7 @@ class GeneratorController(MySupport):
             for Time, Power in reversed(PowerList):
                 try:
                     struct_time = time.strptime(Time, "%x %X")
-                    LogEntryTime = datetime.datetime.fromtimestamp(
-                        time.mktime(struct_time)
-                    )
+                    LogEntryTime = datetime.datetime.fromtimestamp(time.mktime(struct_time))
                 except Exception as e1:
                     self.LogErrorLine("Error in GetPowerLogForMinutes: " + str(e1))
                     continue
@@ -1640,8 +1773,8 @@ class GeneratorController(MySupport):
                     "Error in  ReadPowerLogFromFile (parse file): " + str(e1)
                 )
 
-            if len(PowerList) > 500 and not NoReduce:
-                PowerList = self.ReducePowerSamples(PowerList, 500)
+            if len(PowerList) > self.MaxPowerLogEntries and not NoReduce:
+                PowerList = self.ReducePowerSamples(PowerList, self.MaxPowerLogEntries)
             if not len(self.PowerLogList):
                 self.PowerLogList = PowerList
         return PowerList
@@ -1713,10 +1846,10 @@ class GeneratorController(MySupport):
 
             PowerList = self.ReadPowerLogFromFile(Minutes=Minutes)
 
-            # Shorten list to 500 if specific duration requested
-            # if not KWHours and len(PowerList) > 500 and Minutes and not NoReduce:
-            if len(PowerList) > 500 and Minutes and not NoReduce:
-                PowerList = self.ReducePowerSamples(PowerList, 500)
+            # Shorten list to self.MaxPowerLogEntries if specific duration requested
+            # if not KWHours and len(PowerList) > self.MaxPowerLogEntries and Minutes and not NoReduce:
+            if len(PowerList) > self.MaxPowerLogEntries and Minutes and not NoReduce:
+                PowerList = self.ReducePowerSamples(PowerList, self.MaxPowerLogEntries)
             if KWHours:
                 AvgPower, TotalSeconds = self.GetAveragePower(PowerList)
                 return "%.2f" % ((TotalSeconds / 3600) * AvgPower)
@@ -1725,6 +1858,8 @@ class GeneratorController(MySupport):
                 Consumption, Label = self.GetFuelConsumption(AvgPower, TotalSeconds)
                 if Consumption == None:
                     return "Unknown"
+                if Consumption < 0:
+                    self.LogDebug("WARNING: Fuel Consumption is less than zero in GetPowerHistory: %d" % Consumption)
                 return "%.2f %s" % (Consumption, Label)
             if RunHours:
                 AvgPower, TotalSeconds = self.GetAveragePower(PowerList)
@@ -1945,17 +2080,47 @@ class GeneratorController(MySupport):
 
             if self.UseExternalCTData:
                 NominalCurrent = float(self.NominalKW) * 1000 / self.NominalLineVolts
-                Tile = MyTile(
-                    self.log,
-                    title="External Current",
-                    units="A",
-                    type="current",
-                    nominal=int(NominalCurrent),
-                    callback=self.CheckExternalCTData,
-                    callbackparameters=("current", True, True),
-                )
-                self.TileList.append(Tile)
+                if int(self.Phase) == 1:
+                    NominalLegCurrent = ((float(self.NominalKW) * 1000) / 2 ) / (self.NominalLineVolts / 2)
+                else:
+                    # TODO: validate with 3 phase, also show three gauges?
+                    NominalLegCurrent = float(self.NominalKW) * 1000 / self.NominalLineVolts
 
+                ReturnCurrent1 = self.CheckExternalCTData(request="ct1", ReturnFloat=True, gauge=True)
+                ReturnCurrent2 = self.CheckExternalCTData(request="ct2", ReturnFloat=True, gauge=True)
+                if ReturnCurrent1 != None and ReturnCurrent2 != None:
+                    Tile = MyTile(
+                        self.log,
+                        title="Current L1",
+                        units="A",
+                        type="current",
+                        nominal=int(NominalLegCurrent),
+                        callback=self.CheckExternalCTData,
+                        callbackparameters=("ct1", True, True),
+                    )
+                    self.TileList.append(Tile)
+
+                    Tile = MyTile(
+                        self.log,
+                        title="Current L2",
+                        units="A",
+                        type="current",
+                        nominal=int(NominalLegCurrent),
+                        callback=self.CheckExternalCTData,
+                        callbackparameters=("ct2", True, True),
+                    )
+                    self.TileList.append(Tile)
+                else:
+                    Tile = MyTile(
+                        self.log,
+                        title="External Current",
+                        units="A",
+                        type="current",
+                        nominal=int(NominalCurrent),
+                        callback=self.CheckExternalCTData,
+                        callbackparameters=("current", True, True),
+                    )
+                    self.TileList.append(Tile)
                 NominalPower = float(self.NominalKW)
                 Tile = MyTile(
                     self.log,
@@ -1992,27 +2157,27 @@ class GeneratorController(MySupport):
                 self.TileList.append(Tile)
 
             # external Temp data from gentemp add on
-            if self.UseExternalTempData and self.ExternalTempData != None and self.ExternalTempBounds != None:
+            if self.UseExternalSensorData and self.ExternalSensorGagueData != None:
                 # setup each temp gauge
                 try:
-                    self.LogDebug("Setting up gauges for external temp sensors")
+                    self.LogDebug("Setting up gauges for external sensors")
                     index = 0
-                    TempList = self.ExternalTempData["External Temperature Sensors"]
-                    for (TempDict,TempBounds) in itertools.zip_longest(TempList, self.ExternalTempBounds):
-                        temp_name = list(TempDict.keys())[0]
-                        temp_max = TempBounds['max']
-                        temp_nominal = TempBounds['nominal']
-                        temp_value = TempDict[temp_name]
-                        temp_list = temp_value.strip().split(" ")
-                        temp_units = temp_list[1]
-                        if temp_name != None and temp_max != None and temp_nominal != None:
-                            Tile = MyTile(self.log,title=temp_name, units=temp_units,type="temperature", subtype = "external",
-                                nominal=temp_nominal, maximum=temp_max, callback=self.GetExternalTemp, callbackparameters=(index,),)
-                            self.TileList.append(Tile)
+                    for SensorBounds in self.ExternalSensorGagueData:
+                        sensor_max = SensorBounds['max']
+                        sensor_min = SensorBounds['min']
+                        sensor_nominal = SensorBounds['nominal']
+                        sensor_name = SensorBounds['title'].strip()
+                        sensor_units = SensorBounds['units']
+                        sensor_type = SensorBounds['type']
+                        if sensor_name != None and sensor_max != None and sensor_nominal != None:
+                            if not SensorBounds['exclude_gauge']:
+                                Tile = MyTile(self.log,title=sensor_name, units=sensor_units,type=sensor_type, subtype = "external",
+                                    nominal=sensor_nominal, minimum = sensor_min, maximum=sensor_max, callback=self.GetExternalSensorData, callbackparameters=(sensor_name,),)
+                                self.TileList.append(Tile)
                         index += 1
 
                 except Exception as e1:
-                    self.LogErrorLine("Error in SetupCommonTiles: TempData: " + str(e1))
+                    self.LogErrorLine("Error in SetupCommonTiles: sensor_bounds: " + str(e1))
                 
             # wifi signal strength
             if self.bUseLinuxWifiSignalGauge and self.Platform != None:
@@ -2049,6 +2214,37 @@ class GeneratorController(MySupport):
 
         except Exception as e1:
             self.LogErrorLine("Error in SetupCommonTiles: " + str(e1))
+
+    # ----------  GeneratorController::MaintenanceHouseKeepingThread------------
+    def MaintenanceHouseKeepingThread(self):
+
+        try:
+            time.sleep(0.5)
+            if self.WaitForExit("MaintenanceHouseKeepingThread", 10):  #
+                return
+            
+            while True:
+                try:
+
+                    self.KWHoursMonth = self.GetPowerHistory(
+                        "power_log_json=43200,kw"
+                    )  # 43200 minutes in a month
+                    self.FuelMonth = self.GetPowerHistory("power_log_json=43200,fuel")
+                    self.FuelTotal = self.GetPowerHistory("power_log_json=0,fuel")
+                    self.RunHoursMonth = self.GetPowerHistory(
+                        "power_log_json=43200,time"
+                    )
+                    self.RunHoursYear = self.GetPowerHistory(
+                        "power_log_json=525600,time"
+                    )
+                    # 525600 minutes in a year
+                    if self.WaitForExit("MaintenanceHouseKeepingThread", 60):  #
+                        return
+                except Exception as e1:
+                     self.LogErrorLine("Error in MaintenanceHouseKeepingThread: " + str(e1))
+    
+        except Exception as e1:
+            self.LogErrorLine("Error in MaintenanceHouseKeepingThread (2): " + str(e1))
 
     # ----------  GeneratorController::DisplayMaintenanceCommon------------------
     def DisplayMaintenanceCommon(self, Maintenance, JSONNum=False):
@@ -2172,33 +2368,7 @@ class GeneratorController(MySupport):
                         }
                     )
 
-            # Only update power log related info once a min for performance reasons
-            if (
-                self.LastHouseKeepingTime == None
-                or self.GetDeltaTimeMinutes(
-                    datetime.datetime.now() - self.LastHouseKeepingTime
-                )
-                >= 1
-            ):
-                UpdateNow = True
-                self.LastHouseKeepingTime = datetime.datetime.now()
-            else:
-                UpdateNow = False
             if self.PowerMeterIsSupported() and self.FuelConsumptionSupported():
-                if UpdateNow:
-                    self.KWHoursMonth = self.GetPowerHistory(
-                        "power_log_json=43200,kw"
-                    )  # 43200 minutes in a month
-                    self.FuelMonth = self.GetPowerHistory("power_log_json=43200,fuel")
-                    self.FuelTotal = self.GetPowerHistory("power_log_json=0,fuel")
-                    self.RunHoursMonth = self.GetPowerHistory(
-                        "power_log_json=43200,time"
-                    )
-                    self.RunHoursYear = self.GetPowerHistory(
-                        "power_log_json=525600,time"
-                    )
-                    # 525600 minutes in a year
-
                 if self.KWHoursMonth != None:
                     Maintenance["Maintenance"].append(
                         {
@@ -2263,19 +2433,21 @@ class GeneratorController(MySupport):
     def DisplayStatusCommon(self, Status, JSONNum=False):
 
         try:
+            
             with self.ExternalDataLock:
                 try:
-                    if self.ExternalTempData != None:
+                    if self.ExternalSensorData != None:
                         if not JSONNum:
-                            Status["Status"].append(self.ExternalTempData)
+                            Status["Status"].append({"External Sensors":self.ExternalSensorData})
                         else:
                             # This will unpack the list of dicts and put them in the JSONNum format 
                             TempList = []
-                            ExternalTempList = self.ExternalTempData["External Temperature Sensors"]
+                            ExternalTempList = self.ExternalSensorData
                             if len(ExternalTempList):
-                                Status["Status"].append({"External Temperature Sensors" : TempList})
-                                for TempDict in ExternalTempList:
+                                Status["Status"].append({"External Sensors" : TempList})
+                                for ExTempDict in ExternalTempList:
                                     try:
+                                        TempDict = ExTempDict.copy()    # make a copy since we use popitmes below
                                         if len(TempDict):
                                             TempKey, TempData = TempDict.popitem()
                                             TempDataList = TempData.strip().split( " ")
@@ -2284,7 +2456,7 @@ class GeneratorController(MySupport):
                                         self.LogErrorLine("Error in DisplayStatus (3): " + str(e1))
                 except Exception as e1:
                     self.LogErrorLine("Error in DisplayStatusCommon(2): " + str(e1))
-
+            
             ReturnCurrent = self.CheckExternalCTData(request="current", ReturnFloat=True, gauge=True)
             ReturnCurrent1 = self.CheckExternalCTData(request="ct1", ReturnFloat=True, gauge=True)
             ReturnCurrent2 = self.CheckExternalCTData(request="ct2", ReturnFloat=True, gauge=True)
@@ -2362,7 +2534,10 @@ class GeneratorController(MySupport):
             return None
 
         if self.FuelSensorSupported():
-            FuelLevel = float(self.GetFuelSensor(ReturnInt=True))
+            FuelLevel = self.GetFuelSensor(ReturnInt=True)
+            if FuelLevel == None:
+                return None
+            FuelLevel = float(FuelLevel)
         elif self.ExternalFuelDataSupported():
             FuelLevel = self.GetExternalFuelPercentage(ReturnFloat=True)
         elif self.FuelTankCalculationSupported():
@@ -2376,6 +2551,8 @@ class GeneratorController(MySupport):
                 FuelLevel = float(FuelInTank) / float(self.TankSize) * 100
         else:
             FuelLevel = 0
+        if FuelLevel == None:
+            return FuelLevel
         if ReturnFloat:
             return float(FuelLevel)
         else:
@@ -2578,12 +2755,22 @@ class GeneratorController(MySupport):
             ConsumptionData = self.GetFuelConsumptionDataPoints()
 
             if ConsumptionData == None or len(ConsumptionData) != 5:
+                self.LogDebug("ERROR: Invalid fuel consumption data in GetFuelConsumption: " + str(ConsumptionData))
                 return None, ""
 
             if self.NominalKW == None or float(self.NominalKW) == 0.0:
+                self.LogDebug("ERROR: Invalid nominal kW in GetFuelConsumption: " + str(self.NominalKW))
                 return None, ""
 
+            if kw < 0:
+                self.LogDebug("WARNING: Load is %d in GetFuelConsumption" % kw)
+                kw = 0
+            if seconds < 0:
+                self.LogDebug("WARNING: seconds is %d in GetFuelConsumption" % seconds)
+                seconds = 0
+
             Load = kw / float(self.NominalKW)
+            # X axis is percent utilization, y axis is fuel consumption
             X1 = ConsumptionData[0]
             Y1 = ConsumptionData[1]
             X2 = ConsumptionData[2]
@@ -2598,9 +2785,8 @@ class GeneratorController(MySupport):
                     return 0.0, "L"
                 else:
                     0.0, Units
-            Slope = (Y2 - Y1) / (
-                X2 - X1
-            )  # Slope of fuel consumption plot (it is very close to if not linear in most cases)
+            # Slope of fuel consumption plot (it is very close to if not linear in most cases)
+            Slope = (Y2 - Y1) / (X2 - X1)  
             # now use point slope equation to find consumption for one hour
             # percent load is X2, Consumption is Y2, 100% (1.0) is X1 and Rate 100% is Y1
             # Y1-Y2= SLOPE(X1-X2)
@@ -2610,6 +2796,10 @@ class GeneratorController(MySupport):
 
             # now compensate for time
             Consumption = (seconds / 3600) * Consumption
+
+            if Consumption < 0:
+                self.LogDebug("WARNING: Fuel Consumption is " + str(Consumption)  + " " + Units)
+                Consumption = 0
 
             if self.UseMetric:
                 if self.FuelType == "Natural Gas":
@@ -2635,6 +2825,7 @@ class GeneratorController(MySupport):
         # for 60 kw and below diesle generators KW * 8.5%  = Fuel per hour
         try:
             if self.FuelHalfRate == 0 or self.FuelFullRate == 0:
+                self.LogDebug("ERROR: Fuel Half Rate or Full Rate is zero: Half: " + str(self.FuelHalfRate) + "Full: " + str(self.FuelFullRate) )
                 return None
 
             return [
@@ -2754,77 +2945,162 @@ class GeneratorController(MySupport):
             return "Error"
         return "OK"
 
-    # ----------  GeneratorController::SetExternalTemperatureData----------------
-    def SetExternalTemperatureData(self, command):
+    # ----------  GeneratorController::CheckLegBalance--------------------------
+    def CheckLegBalance(self, current_leg1, current_leg2, current_leg3 = None):
+        try:
+            ReturnValue = True
+
+            if self.bDisablePowerLog:
+                return True
+            if self.UnbalancedCapacity == None or not isinstance(self.UnbalancedCapacity, float) or self.UnbalancedCapacity <= 0:
+                return True
+        
+            if self.UnbalancedCapacity > 0.50:
+                self.UnbalancedCapacity == 0.5
+            elif self.UnbalancedCapacity > 0:
+                self.UnbalancedCapacity == 0
+
+            if current_leg3 != None and current_leg3 == 0 and current_leg1 == 0 and current_leg2 == 0:
+                return True
+            if current_leg1 == 0 and current_leg2 == 0:
+                return True
+
+            try:
+                NominalKw = float(self.NominalKW)
+                NominalLineVolts = float(self.NominalLineVolts)
+            except:
+                return True 
+            
+            leg_notice = ""
+            MaxCurrent = float(((NominalKw) * 1000.0) / NominalLineVolts)
+            diffvalue = abs(current_leg1 - current_leg2) / MaxCurrent
+            if ((abs(current_leg1 - current_leg2) / MaxCurrent) > self.UnbalancedCapacity):
+                msgbody = ("Unbalanced load on L1-L2:  %.2fA,  %.2fA, difference  is %d%% of %dA" % 
+                    (current_leg1, current_leg2,((abs(current_leg1 - current_leg2) / MaxCurrent) * 100), MaxCurrent))
+                leg_notice = "L1 - L2"
+                self.LogDebug(msgbody)
+                ReturnValue = False
+            if current_leg3 != None:
+                # now check leg 3
+                if ((abs(current_leg3 - current_leg2) / MaxCurrent) > self.UnbalancedCapacity):
+                    msgbody = ("Unbalanced load on L2-L3:  %.2fA,  %.2fA, difference  is %d%% of %dA" % 
+                    (current_leg1, current_leg2,((abs(current_leg1 - current_leg2) / MaxCurrent) * 100), MaxCurrent))
+                    leg_notice = "L2 - L3"
+                    self.LogDebug(msgbody)
+                    ReturnValue = False
+                if ((abs(current_leg3 - current_leg1) / MaxCurrent) > self.UnbalancedCapacity):
+                    msgbody = ("Unbalanced load on L1-L3:  %.2fA,  %.2fA, difference  is %d%% of %dA" % 
+                    (current_leg1, current_leg2,((abs(current_leg1 - current_leg2) / MaxCurrent) * 100), MaxCurrent))
+                    leg_notice = "L1 - L3"
+                    self.LogDebug(msgbody)
+                    ReturnValue = False
+            if not ReturnValue:
+                self.MessagePipe.SendMessage(
+                    "Generator Warning at %s: Load Imbalance on %s" % (self.SiteName, leg_notice),
+                    msgbody,
+                    msgtype="warn",
+                    oncedaily=True,
+                )
+            return ReturnValue
+        except Exception as e1:
+            self.LogErrorLine("Error in CheckLegBalance: " + str(e1))
+            return False
+    # ----------  GeneratorController::SetExternalSensorData----------------
+    def SetExternalSensorData(self, command):
 
         try:
             if not isinstance(command, str) and not isinstance(command, unicode):
-                self.LogErrorLine("Error in SetExternalTemperatureData, invalid data: " + str(type(command)))
+                self.LogErrorLine("Error in SetExternalSensorData, invalid data: " + str(type(command)))
                 return "Error"
 
-            bInitTempTiles = False
             with self.ExternalDataLock:
                 CmdList = command.split("=")
                 if len(CmdList) == 2:
-                    if self.ExternalTempData == None:
-                        bInitTempTiles = True
-                    self.ExternalTempData = json.loads(CmdList[1])
-                    self.ExternalTempDataTime = datetime.datetime.now()
+                    if self.ExternalSensorData == None:
+                        self.ExternalSensorData = json.loads(CmdList[1])
+                    else:
+                        new_list = json.loads(CmdList[1])   # list of dicts {'label': 'value with units'}
+                        for new_sensor in new_list:
+                            found = False
+                            for i in range(len(self.ExternalSensorData)):
+                                existing_sensor = self.ExternalSensorData[i]
+                                if list(new_sensor.keys())[0] == list(existing_sensor.keys())[0]:
+                                    self.ExternalSensorData[i] = new_sensor
+                                    found = True
+                            if not found:   # first time seeing this sensor
+                                self.ExternalSensorData.append(new_sensor)
+
+                    self.UseExternalSensorData = True
+                    self.ExternalSensorDataTime = datetime.datetime.now()
+                    
                 else:
-                    self.LogError("Error in  SetExternalTemperatureData: invalid input: " + str(len(CmdList)))
+                    self.LogError("Error in  SetExternalSensorData: invalid input: " + str(len(CmdList)))
                     return "Error"
-            if bInitTempTiles:
-                self.UseExternalTempData = True
-                self.SetupTiles()
 
         except Exception as e1:
-            self.LogErrorLine("Error in SetExternalTemperatureData: " + str(e1))
+            self.LogErrorLine("Error in SetExternalSensorData: " + str(e1))
             return "Error"
 
         return "OK"
 
-    # ----------  GeneratorController::GetExternalTemp--------------------------
+    # ----------  GeneratorController::GetExternalSensorData--------------------------
     # used to get external temp data for gauge / tile
-    def GetExternalTemp(self, sensor_index):
+    def GetExternalSensorData(self, sensor_name):
         try:
-            if not self.UseExternalTempData or self.ExternalTempData == None or self.ExternalTempBounds == None:
+            if not self.UseExternalSensorData or self.ExternalSensorData == None or self.ExternalSensorGagueData == None:
                 return 0.0
-            index = 0
-            TempList = self.ExternalTempData["External Temperature Sensors"]
-            for TempDict in TempList:
-                if index == sensor_index:
-                    temp_name = list(TempDict.keys())[0]
-                    temp_value = TempDict[temp_name]
-                    temp_list = temp_value.strip().split(" ")
-                    temp_value = temp_list[0]
-                    return float(temp_value)
-                    
-                index += 1
+
+            with self.ExternalDataLock:
+                if len(self.ExternalSensorData) > 0:
+                    for SensorDict in self.ExternalSensorData:
+                        if sensor_name == list(SensorDict.keys())[0]:
+                            sensor_value = SensorDict[sensor_name]
+                            return self.ConvertToNumber(sensor_value)
+                else:
+                    self.LogDebug("Error in GetExternalSensorData: " + str(self.ExternalSensorData))
+                        
+            self.LogDebug("Sensor data not found in GetExternalSensorData: " + str(sensor_name))
+
+            return 0.0
         except Exception as e1:
-            self.LogErrorLine("Error in GetExternalTemp: " + str(e1))
+            self.LogErrorLine("Error in GetExternalSensorData: " + str(e1) + ": " + str(sensor_name) + ": " + str(self.ExternalSensorData))
             return 0.0
 
-    # ----------  GeneratorController::SetExternalTemperatureBounds-------------
-    # NOTE: This command must be called first before SetExternalTemperatureData
+    # ----------  GeneratorController::SetExternalGaugeData-------------
+    # NOTE: This command must be called first before SetExternalSensorData
     # otherwise the bounds data will be ignored
-    def SetExternalTemperatureBounds(self, command):
+    def SetExternalGaugeData(self, command):
 
         try:
             if not isinstance(command, str) and not isinstance(command, unicode):
-                self.LogErrorLine("Error in SetExternalTemperatureBounds, invalid data: " + str(type(command)))
+                self.LogErrorLine("Error in SetExternalGaugeData, invalid data: " + str(type(command)))
                 return "Error"
 
             with self.ExternalDataLock:
                 CmdList = command.split("=")
                 if len(CmdList) == 2:
-                    self.ExternalTempBounds = json.loads(CmdList[1])
-
+                    TempSensorGaugeList = json.loads(CmdList[1])
+                    if self.ExternalSensorGagueData == None:
+                        self.ExternalSensorGagueData = TempSensorGaugeList
+                        self.UseExternalSensorData = True
+                    else:
+                        
+                        for Gauge in TempSensorGaugeList:
+                            found = False
+                            for ExistingGauge in  self.ExternalSensorGagueData:
+                                if ExistingGauge['title'] == Gauge['title']:
+                                    found = True    # already exist
+                                    self.LogDebug("Gauge already exist: " + Gauge['title'])
+                                    break
+                            if not found:
+                                self.ExternalSensorGagueData.append(Gauge)
+                    self.SetupTiles()
                 else:
-                    self.LogError("Error in  SetExternalTemperatureBounds: invalid input: " + str(len(CmdList)))
+                    self.LogError("Error in  SetExternalGaugeData: invalid input: " + str(len(CmdList)))
                     return "Error"
 
         except Exception as e1:
-            self.LogErrorLine("Error in SetExternalTemperatureBounds: " + str(e1))
+            self.LogErrorLine("Error in SetExternalGaugeData: " + str(e1))
             return "Error"
 
         return "OK"
@@ -2877,49 +3153,49 @@ class GeneratorController(MySupport):
             if ExternalData == None:
                 return None
 
-            if request.lower() == "current" and "current" in ExternalData:
+            if request.lower() == "current" and "current" in ExternalData.keys():
                 return self.ReturnFormat(ExternalData["current"], "A", ReturnFloat)
 
-            if request.lower() == "power" and "power" in ExternalData:
+            if request.lower() == "power" and "power" in ExternalData.keys():
                 return self.ReturnFormat(ExternalData["power"], "kW", ReturnFloat)
 
             if (
                 request.lower() == "ct1"
-                and "ctdata" in ExternalData
+                and "ctdata" in ExternalData.keys()
                 and len(ExternalData["ctdata"]) >= 2
             ):
                 return self.ReturnFormat(ExternalData["ctdata"][0], "A", ReturnFloat)
             if (
                 request.lower() == "ct2"
-                and "ctdata" in ExternalData
+                and "ctdata" in ExternalData.keys()
                 and len(ExternalData["ctdata"]) >= 2
             ):
                 return self.ReturnFormat(ExternalData["ctdata"][1], "A", ReturnFloat)
             if (
                 request.lower() == "ctpower1"
-                and "ctpower" in ExternalData
+                and "ctpower" in ExternalData.keys()
                 and len(ExternalData["ctpower"]) >= 2
             ):
                 return self.ReturnFormat(ExternalData["ctpower"][0], "kW", ReturnFloat)
             if (
                 request.lower() == "ctpower2"
-                and "ctpower" in ExternalData
+                and "ctpower" in ExternalData.keys()
                 and len(ExternalData["ctpower"]) >= 2
             ):
                 return self.ReturnFormat(ExternalData["ctpower"][1], "kW", ReturnFloat)
 
-            if "powerfactor" in ExternalData:
+            if "powerfactor" in ExternalData.keys():
                 powerfactor = float(ExternalData["powerfactor"])
             else:
                 powerfactor = 1.0
 
             if voltage == None:
-                if "voltage" in ExternalData:
+                if "voltage" in ExternalData.keys():
                     voltage = int(ExternalData["voltage"])
                 else:
                     return None
 
-            if "phase" in ExternalData:
+            if "phase" in ExternalData.keys():
                 phase = ExternalData["phase"]
             else:
                 phase = 1
@@ -2929,11 +3205,11 @@ class GeneratorController(MySupport):
                 # TODO check this
                 singlelegvoltage = voltage / 3
 
-            if request.lower() == "current" and "power" in ExternalData:
+            if request.lower() == "current" and "power" in ExternalData.keys():
                 if voltage == 0:
                     return self.ReturnFormat(0.0, "A", ReturnFloat)
 
-                if "ctpower" in ExternalData and len(ExternalData["ctpower"]) >= 2:
+                if "ctpower" in ExternalData.keys() and len(ExternalData["ctpower"]) >= 2:
                     power1 = float(ExternalData["ctpower"][0]) * 1000
                     power2 = float(ExternalData["ctpower"][1]) * 1000
                     CurrentFloat = round(
@@ -2946,11 +3222,7 @@ class GeneratorController(MySupport):
                     # I(A) = P(W) / (PF x V(V))
                     CurrentFloat = round(PowerFloat / (powerfactor * voltage), 2)
                 return self.ReturnFormat(CurrentFloat, "A", ReturnFloat)
-            if (
-                request.lower() == "power"
-                and "current" in ExternalData
-                and "ctdata" in ExternalData
-            ):
+            elif request.lower() == "power"and "current" in ExternalData.keys() and "ctdata" in ExternalData.keys():
                 CurrentFloat = float(ExternalData["current"])
                 if len(ExternalData["ctdata"]) < 2:
                     # P(W) = PF x I(A) x V(V)
@@ -2963,8 +3235,36 @@ class GeneratorController(MySupport):
                         (powerfactor * current1 * (singlelegvoltage))
                         + (powerfactor * current2 * (singlelegvoltage))
                     ) / 1000
+                    #
                 return self.ReturnFormat(PowerFloat, "kW", ReturnFloat)
-
+            elif (request.lower() in ["ct1", "ct2"] and "ctpower" in ExternalData.keys() 
+                and "voltagelegs" in ExternalData.keys() and len(ExternalData["voltagelegs"]) != 0):
+                # convert leg power to leg current
+                if request.lower() == "ct1":
+                    ctpower = ExternalData["ctpower"][0]
+                    extvolts = ExternalData["voltagelegs"][0]
+                elif request.lower() == "ct2":
+                    ctpower = ExternalData["ctpower"][1]
+                    extvolts = ExternalData["voltagelegs"][1]
+                else:
+                    self.LogDebug("Error in ConvertExternalData: invalid CT requested")
+                    return None
+                CurrentFloat = round(((ctpower*1000.0) / extvolts),2)
+                return self.ReturnFormat(CurrentFloat, "A", ReturnFloat)
+            elif (request.lower() in ["ctpower1", "ctpower2"] and "ctdata" in ExternalData.keys() 
+                  and "voltagelegs" in ExternalData.keys() and len(ExternalData["voltagelegs"]) != 0):
+                # convert leg current to leg power
+                if request.lower() == "ctpower1":
+                    extcurrent = ExternalData["ctdata"][0]
+                    extvolts = ExternalData["voltagelegs"][0]
+                elif request.lower() == "ctpower2":
+                    extcurrent = ExternalData["ctdata"][1]
+                    extvolts = ExternalData["voltagelegs"][1]
+                else:
+                    self.LogDebug("Error in ConvertExternalData: invalid Power requested")
+                    return None
+                PowerFloat = round(((extcurrent * extvolts)/1000.0),2)
+                return self.ReturnFormat(PowerFloat, "kW", ReturnFloat)
             return None
 
         except Exception as e1:
@@ -3243,11 +3543,6 @@ class GeneratorController(MySupport):
             except:
                 pass
 
-            if self.ModBus != None:
-                try:
-                    self.ModBus.Close()
-                except:
-                    pass
             try:
                 if self.EnableDebug:
                     self.KillThread("DebugThread")
@@ -3265,10 +3560,23 @@ class GeneratorController(MySupport):
                 pass
 
             try:
+                self.KillThread("MaintenanceHouseKeepingThread")
+            except:
+                pass
+            try:
                 self.KillThread("PowerMeter")
             except:
                 pass
 
+            if self.ModBus != None:
+                # close modbus last 
+                try:
+                    if self.ControllerSelected.lower() == "h_100":
+                        # H100 has problems with locking up if partial modbus packets are sent so delay here
+                        time.sleep(0.5)
+                    self.ModBus.Close()
+                except:
+                    pass
         except Exception as e1:
             self.LogErrorLine("Error Closing Controller: " + str(e1))
 

@@ -183,11 +183,10 @@ class Loader(MySupport):
             ["psutil", "psutil", None],  # process utilities
             ["chump", "chump", None],  # for genpushover
             ["twilio", "twilio", None],  # for gensms
-            ["paho.mqtt.client", "paho-mqtt", None],  # for genmqtt
+            ["paho.mqtt.client", "paho-mqtt", "1.6.1"],  # for genmqtt
             ["OpenSSL", "pyopenssl", None],  # SSL
             ["spidev", "spidev", None],  # spidev
-            ["mopeka_pro_check","mopeka_pro_check", None],  # mopeka_pro_check for genmopeka
-            ["voipms", "voipms", None]      # voipms for gensms_voip
+            ["voipms", "voipms", "0.2.5"]      # voipms for gensms_voip
             # ['fluids', 'fluids', None]              # fluids for genmopeka
         ]
         try:
@@ -196,10 +195,8 @@ class Loader(MySupport):
             self.CheckToolsNeeded()
 
             for Module in ModuleList:
-                # mopeka_pro_check is only for Python 3.7 and higher
-                if (
-                    Module[0] == "mopeka_pro_check" or Module[0] == "fluids"
-                ) and sys.version_info < (3, 7):
+                # fluids is only for Python 3.6 and higher
+                if (Module[0] == "fluids") and sys.version_info < (3, 6):
                     continue
                 if not self.LibraryIsInstalled(Module[0]):
                     self.LogInfo(
@@ -273,7 +270,8 @@ class Loader(MySupport):
             if self.PipChecked:
                 return True
 
-            command_list = [self.pipProgram, "-V"]
+            command_list = [sys.executable, "-m", "pip", "-V"]
+            #command_list = [self.pipProgram, "-V"]
             if not self.ExecuteCommandList(command_list):
                 self.InstallBaseSoftware()
 
@@ -333,6 +331,7 @@ class Loader(MySupport):
             "genpushover.conf": "/etc/",
             "gensyslog.conf": "/etc/",
             "genmqtt.conf": "/etc/",
+            "genmqttin.conf": "/etc/",
             "genslack.conf": "/etc/",
             "gencallmebot.conf": "/etc/",
             "genexercise.conf": "/etc/",
@@ -450,7 +449,7 @@ class Loader(MySupport):
                     if "linux" in sys.platform:
                         self.CheckBaseSoftware()
 
-                    install_list = [self.pipProgram, "freeze", libraryname]
+                    install_list = [sys.executable, "-m", "pip", "freeze", libraryname]
 
                     process = Popen(install_list, stdout=PIPE, stderr=PIPE)
                     output, _error = process.communicate()
@@ -512,11 +511,11 @@ class Loader(MySupport):
                 self.CheckBaseSoftware()
 
             if update:
-                install_list = [self.pipProgram, "install", libraryname, "-U"]
+                install_list = [sys.executable, "-m", "pip", "install", libraryname, "-U"]
             elif uninstall:
-                install_list = [self.pipProgram, "uninstall", "-y", libraryname]
+                install_list = [sys.executable, "-m", "pip", "uninstall", "-y", libraryname]
             else:
-                install_list = [self.pipProgram, "install", libraryname]
+                install_list = [sys.executable, "-m", "pip", "install", libraryname]
 
             process = Popen(install_list, stdout=PIPE, stderr=PIPE)
             output, _error = process.communicate()
@@ -524,9 +523,7 @@ class Loader(MySupport):
             if _error:
                 self.LogInfo(
                     "Error in InstallLibrary using pip : "
-                    + libraryname
-                    + " : UnInstall: "
-                    + str(uninstall)
+                    + str(install_list)
                     + ": "
                     + str(_error)
                 )
@@ -536,9 +533,7 @@ class Loader(MySupport):
         except Exception as e1:
             self.LogInfo(
                 "Error installing module: "
-                + libraryname
-                + " : UnInstall: "
-                + str(uninstall)
+                + str(install_list)
                 + ": "
                 + str(e1),
                 LogLine=True,
@@ -704,6 +699,7 @@ class Loader(MySupport):
                 "genpushover",
                 "gensyslog",
                 "genmqtt",
+                "genmqttin",
                 "genslack",
                 "gencallmebot",
                 "genexercise",
@@ -839,6 +835,15 @@ class Loader(MySupport):
                             section=entry,
                             module="gensms_voip.py",
                             conffile="gensms_voip.conf",
+                        )
+                    if entry == "genmqttin":
+                        self.LogError(
+                            "Warning: Missing entry: " + entry + " , adding entry"
+                        )
+                        self.AddEntry(
+                            section=entry,
+                            module="genmqttin.py",
+                            conffile="genmqttin.conf",
                         )
                     if entry == "gencustomgpio":
                         self.LogError(

@@ -68,6 +68,7 @@ class MyGenPush(MySupport):
         blacklist=None,
         flush_interval=float("inf"),
         use_numeric=False,
+        use_numeric_object=False,
         strlist_json = False,
         debug=False,
         loglocation=ProgramDefaults.LogPath,
@@ -78,6 +79,7 @@ class MyGenPush(MySupport):
         self.Callback = callback
 
         self.UseNumeric = use_numeric
+        self.UseNumericObject = use_numeric_object
         self.StrListJson = strlist_json
         self.debug = debug
         self.Exiting = False
@@ -211,7 +213,7 @@ class MyGenPush(MySupport):
         while True:
             try:
 
-                if not self.UseNumeric:
+                if not self.UseNumeric and not self.UseNumericObject:
                     statusdata = self.SendCommand("generator: status_json")
                     maintdata = self.SendCommand("generator: maint_json")
                     outagedata = self.SendCommand("generator: outage_json")
@@ -259,7 +261,10 @@ class MyGenPush(MySupport):
             for key, item in node.items():
                 if isinstance(item, dict):
                     CurrentPath = PathPrefix + "/" + str(key)
-                    self.CheckDictForChanges(item, CurrentPath)
+                    if self.UseNumericObject and self.DictIsTopicJSON(item):
+                        self.CheckForChanges(CurrentPath, json.dumps(item, sort_keys=False))
+                    else:
+                        self.CheckDictForChanges(item, CurrentPath)
                 elif isinstance(item, list):
                     CurrentPath = PathPrefix + "/" + str(key)
                     if self.ListIsStrings(item):
@@ -271,7 +276,10 @@ class MyGenPush(MySupport):
                     else:
                         for listitem in item:
                             if isinstance(listitem, dict):
-                                self.CheckDictForChanges(listitem, CurrentPath)
+                                if self.UseNumericObject and self.DictIsTopicJSON(item):
+                                    self.CheckForChanges(CurrentPath, json.dumps(item, sort_keys=False))
+                                else:
+                                    self.CheckDictForChanges(listitem, CurrentPath)
                             else:
                                 self.LogError(
                                     "Invalid type in CheckDictForChanges: %s %s (2)"
@@ -283,6 +291,17 @@ class MyGenPush(MySupport):
         else:
             self.LogError("Invalid type in CheckDictForChanges %s " % str(type(node)))
 
+    # ---------- MyGenPush::DictIsTopicJSON-------------------------------------
+    def DictIsTopicJSON(self, entry):
+        try:
+            if not isinstance(entry, dict):
+                return False
+            if "type" in entry.keys() and "value" in entry.keys() and "unit" in entry.keys():
+                return True
+            return False
+        except Exception as e1:
+            self.LogErrorLine("Error in DictIsTopicJSON: " + str(e1))
+            return False
     # ---------- MyGenPush::ListIsStrings---------------------------------------
     # return true if every element of list is a string
     def ListIsStrings(self, listinput):
@@ -365,6 +384,7 @@ class MyMQTT(MyCommon):
         self.UseNumeric = False
         self.StringListJson = False
         self.RemoveSpaces = False
+        self.Retain = False
         self.PollTime = 2
         self.FlushInterval = float(
             "inf"
@@ -394,6 +414,8 @@ class MyMQTT(MyCommon):
             self.MonitorAddress = config.ReadValue(
                 "monitor_address", default=self.MonitorAddress
             )
+            if self.MonitorAddress != None:
+                self.MonitorAddress = self.MonitorAddress.strip()
             if self.MonitorAddress == None or not len(self.MonitorAddress):
                 self.MonitorAddress = ProgramDefaults.LocalHost
 
@@ -404,6 +426,9 @@ class MyMQTT(MyCommon):
             self.UseNumeric = config.ReadValue(
                 "numeric_json", return_type=bool, default=False
             )
+            self.UseNumericObject = config.ReadValue(
+                "numeric_json_object", return_type=bool, default=False
+            )
             self.StringListJson = config.ReadValue(
                 "strlist_json", return_type=bool, default=False
             )
@@ -411,6 +436,10 @@ class MyMQTT(MyCommon):
                 "remove_spaces", return_type=bool, default=False
             )
             self.TopicRoot = config.ReadValue("root_topic")
+
+            self.Retain = config.ReadValue(
+                "retain", return_type=bool, default=False
+            )
 
             if self.TopicRoot != None:
                 self.TopicRoot = self.TopicRoot.strip()
@@ -429,7 +458,12 @@ class MyMQTT(MyCommon):
             self.CertReqs = config.ReadValue(
                 "cert_reqs", return_type=str, default="Required"
             )
-
+            self.ClientCertificatePath = config.ReadValue(
+                "client_cert_path", default=""
+            )
+            self.ClientKeyPath = config.ReadValue(
+                "client_key_path", default=""
+            )
             BlackList = config.ReadValue("blacklist")
 
             if BlackList != None:
@@ -501,8 +535,21 @@ class MyMQTT(MyCommon):
                             "Error: invalid TLS version specified, defaulting to 1.0: "
                             + self.TLSVersion
                         )
+                    certfile = None
+                    keyfile = None
+                    # strip off any whitespace
+                    self.ClientCertificatePath = self.ClientCertificatePath.strip()
+                    self.ClientKeyPath = self.ClientKeyPath.strip()
+                    # if nothing is there then use None
+                    if len(self.ClientCertificatePath):
+                        certfile = self.ClientCertificatePath
+                    if len(self.ClientKeyPath):
+                        keyfile = self.ClientKeyPath
+
                     self.MQTTclient.tls_set(
                         ca_certs=self.CertificateAuthorityPath,
+                        certfile=certfile,
+                        keyfile=keyfile,
                         cert_reqs=cert_reqs,
                         tls_version=use_tls,
                     )
@@ -532,6 +579,7 @@ class MyMQTT(MyCommon):
                 blacklist=self.BlackList,
                 flush_interval=self.FlushInterval,
                 use_numeric=self.UseNumeric,
+                use_numeric_object=self.UseNumericObject,
                 strlist_json = self.StringListJson,
                 debug=self.debug,
                 port=port,
@@ -576,7 +624,7 @@ class MyMQTT(MyCommon):
                     + str(type(value))
                 )
 
-            self.MQTTclient.publish(FullPath, value)
+            self.MQTTclient.publish(FullPath, value, retain=self.Retain)
         except Exception as e1:
             self.LogErrorLine("Error in MyMQTT:PublishCallback: " + str(e1))
 

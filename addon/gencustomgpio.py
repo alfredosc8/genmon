@@ -150,6 +150,9 @@ class GenCustomGPIO(MySupport):
                 )
                 
             # Validate settings  
+            if self.MonitorAddress != None:
+                self.MonitorAddress = self.MonitorAddress.strip()
+
             if self.MonitorAddress == None or not len(self.MonitorAddress):
                 self.MonitorAddress = ProgramDefaults.LocalHost
 

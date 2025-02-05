@@ -25,12 +25,13 @@ from genmonlib.mycommon import MyCommon
 class MyPlatform(MyCommon):
 
     # ------------ MyPlatform::init----------------------------------------------
-    def __init__(self, log=None, usemetric=True):
+    def __init__(self, log=None, usemetric=True, debug=None):
         self.log = log
         self.UseMetric = usemetric
+        self.debug = debug
 
     # ------------ MyPlatform::GetInfo-------------------------------------------
-    def GetInfo(self):
+    def GetInfo(self, JSONNum=False):
 
         Info = []
 
@@ -53,7 +54,7 @@ class MyPlatform(MyCommon):
         return datetime.datetime.now().strftime("%A %B %-d, %Y %H:%M:%S")
 
     # ------------ MyPlatform::GetPlatformInfo-----------------------------------
-    def GetPlatformInfo(self):
+    def GetPlatformInfo(self, JSONNum=False):
 
         if self.IsPlatformRaspberryPi():
             return self.GetRaspberryPiInfo()
@@ -61,7 +62,7 @@ class MyPlatform(MyCommon):
             return None
 
     # ------------ MyPlatform::GetOSInfo-----------------------------------------
-    def GetOSInfo(self):
+    def GetOSInfo(self, JSONNum=False):
 
         if self.IsOSLinux():
             return self.GetLinuxInfo()
@@ -102,6 +103,10 @@ class MyPlatform(MyCommon):
     def IsPlatformRaspberryPi(self, raise_on_errors=False):
 
         try:
+            model = self.GetRaspberryPiModel(bForce = True)
+            if model != None and "raspberry" in model.lower():
+                return True 
+            
             with open("/proc/cpuinfo", "r") as cpuinfo:
                 found = False
                 for line in cpuinfo:
@@ -138,7 +143,7 @@ class MyPlatform(MyCommon):
         return True
 
     # ------------ Evolution:GetRaspberryPiTemp ---------------------------------
-    def GetRaspberryPiTemp(self, ReturnFloat=False):
+    def GetRaspberryPiTemp(self, ReturnFloat=False, JSONNum=False):
 
         # get CPU temp
         try:
@@ -146,7 +151,7 @@ class MyPlatform(MyCommon):
                 DefaultReturn = 0.0
             else:
                 DefaultReturn = "0"
-            
+
             if not self.IsOSLinux():
                 return DefaultReturn
             try:
@@ -171,12 +176,15 @@ class MyPlatform(MyCommon):
                 if tempfilepath == None:
                     tempfilepath = "/sys/class/thermal/thermal_zone0/temp"
 
-                process = Popen(["cat", tempfilepath], stdout=PIPE)
-                output, _error = process.communicate()
-                output = output.decode("utf-8")
+                if os.path.exists(tempfilepath):
+                    process = Popen(["cat", tempfilepath], stdout=PIPE)
+                    output, _error = process.communicate()
+                    output = output.decode("utf-8")
 
-                TempCelciusFloat = float(float(output) / 1000)
-
+                    TempCelciusFloat = float(float(output) / 1000)
+                else:
+                    # not sure what OS this is, possibly docker image
+                    return DefaultReturn
             if self.UseMetric:
                 if not ReturnFloat:
                     return "%.2f C" % TempCelciusFloat
@@ -195,8 +203,21 @@ class MyPlatform(MyCommon):
             self.LogErrorLine("Error in GetRaspberryPiTemp: " + str(e1))
         return DefaultReturn
 
+    # ------------ MyPlatform::GetRaspberryPiModel -----------------------------
+    def GetRaspberryPiModel(self, bForce = False):
+        try:
+            if bForce == False and not self.IsPlatformRaspberryPi():
+                return None
+        
+            process = Popen(["cat", "/proc/device-tree/model"], stdout=PIPE)
+            output, _error = process.communicate()
+            if sys.version_info[0] >= 3:
+                output = output.decode("utf-8")
+            return str(output.rstrip("\x00"))
+        except Exception as e1:
+            return None
     # ------------ MyPlatform::GetRaspberryPiInfo -------------------------------
-    def GetRaspberryPiInfo(self):
+    def GetRaspberryPiInfo(self, JSONNum=False):
 
         if not self.IsPlatformRaspberryPi():
             return None
@@ -207,11 +228,8 @@ class MyPlatform(MyCommon):
                 {"CPU Temperature": self.GetRaspberryPiTemp(ReturnFloat=False)}
             )
             try:
-                process = Popen(["cat", "/proc/device-tree/model"], stdout=PIPE)
-                output, _error = process.communicate()
-                if sys.version_info[0] >= 3:
-                    output = output.decode("utf-8")
-                PiInfo.append({"Pi Model": str(output).rstrip("\x00")})
+                model = self.GetRaspberryPiModel()
+                PiInfo.append({"Pi Model": model})
             except:
                 pass
             try:
@@ -311,7 +329,7 @@ class MyPlatform(MyCommon):
         return None
 
     # ------------ MyPlatform::GetLinuxInfo -------------------------------------
-    def GetLinuxInfo(self):
+    def GetLinuxInfo(self, JSONNum=False):
 
         if not self.IsOSLinux():  # call staticfuntion
             return None
@@ -380,7 +398,7 @@ class MyPlatform(MyCommon):
         return LinuxInfo
 
     # ------------ MyPlatform::GetWiFiSignalStrength ----------------------------
-    def GetWiFiSignalStrength(self, ReturnInt=True):
+    def GetWiFiSignalStrength(self, ReturnInt=True, JSONNum=False):
 
         try:
             if ReturnInt == True:
@@ -410,7 +428,7 @@ class MyPlatform(MyCommon):
             return DefaultReturn
 
     # ------------ MyPlatform::GetWiFiSignalStrengthFromAdapter -----------------
-    def GetWiFiSignalStrengthFromAdapter(self, adapter):
+    def GetWiFiSignalStrengthFromAdapter(self, adapter, JSONNum=False):
         try:
             result = subprocess.check_output(["iw", adapter, "link"])
             if sys.version_info[0] >= 3:
@@ -421,7 +439,7 @@ class MyPlatform(MyCommon):
             return "0"
 
     # ------------ MyPlatform::GetWiFiSignalQuality -----------------------------
-    def GetWiFiSignalQuality(self, adapter):
+    def GetWiFiSignalQuality(self, adapter, JSONNum=False):
         try:
             result = subprocess.check_output(["iwconfig", adapter])
             if sys.version_info[0] >= 3:
@@ -443,7 +461,7 @@ class MyPlatform(MyCommon):
             return ""
 
     # ------------ MyPlatform::GetWiFiInfo --------------------------------------
-    def GetWiFiInfo(self, adapter):
+    def GetWiFiInfo(self, adapter, JSONNum=False):
 
         WiFiInfo = []
 
@@ -455,7 +473,7 @@ class MyPlatform(MyCommon):
                     ListItems = line.split()
                     if len(ListItems) > 4:
 
-                        signal = self.GetWiFiSignalStrength()
+                        signal = self.GetWiFiSignalStrength(JSONNum=JSONNum)
                         if signal != 0:
                             WiFiInfo.append({"WLAN Signal Level": str(signal) + " dBm"})
                         else:
@@ -465,9 +483,7 @@ class MyPlatform(MyCommon):
                         try:
                             WiFiInfo.append(
                                 {
-                                    "WLAN Signal Quality": self.GetWiFiSignalQuality(
-                                        adapter
-                                    )
+                                    "WLAN Signal Quality": self.GetWiFiSignalQuality(adapter, JSONNum=JSONNum)
                                 }
                             )
                         except:

@@ -18,6 +18,15 @@
 - [Add user defined levels to low fuel notifications](https://github.com/jgyates/genmon/issues/818) @rwskinner
 - [Add option to restore backup settings](https://github.com/jgyates/genmon/issues/829) @dmperl 
 - [Hardware keys (FIDO2) for 2fa](https://github.com/jgyates/genmon/issues/841) @danodemano 
-- Add daily options to enhanced exercise add on 
 - [Add the ability to save pictures in the service journal](https://github.com/jgyates/genmon/issues/896) @northportio
 - [Ecobee thermostat messaging](https://github.com/jgyates/genmon/issues/921) @wtnh 
+- [Kiosk mode](https://github.com/jgyates/genmon/issues/970) @mstackler 
+- Add the ability to report the temperature of mopeka tank sensors in the UI and SNMP/MQTT
+- Add the ability to set the name of external tank
+- [Add reading watchdog in gentankutil](https://github.com/jgyates/genmon/issues/1018)
+- [Keep alive for Silk broswers](https://github.com/jgyates/genmon/discussions/1059)
+- [Save Gauge Layout](https://github.com/jgyates/genmon/discussions/1078)
+- [Add on to monitor key values and alert if out of range](https://github.com/jgyates/genmon/discussions/1089)
+- [Manual Start and Transfer but stop after x minutes](https://github.com/jgyates/genmon/discussions/1174) @jkh62
+- [Add device specific messaging to pushover](https://github.com/jgyates/genmon/issues/1246) @noumenon272
+

@@ -328,6 +328,8 @@ def CheckLockOutDuration():
                     "title": "Security Warning",
                     "body": "Genmon login is locked due to exceeding the maximum login attempts.",
                     "type": "error",
+                    "oncedaily": False,
+                    "onlyonce": False,
                 }
                 command = "generator: notify_message=" + json.dumps(message)
 
@@ -354,6 +356,8 @@ def doLdapLogin(username, password):
         return False
     try:
         from ldap3 import ALL, NTLM, Connection, Server
+        from ldap3.utils.dn import escape_rdn
+        from ldap3.utils.conv import escape_filter_chars
     except ImportError as importException:
         LogError(
             "LDAP3 import not found, run 'sudo pip install ldap3 && sudo pip3 install ldap3'"
@@ -382,9 +386,10 @@ def doLdapLogin(username, password):
             authentication=NTLM,
             auto_bind=True,
         )
+        loginbasestr = escape_filter_chars("(&(objectclass=user)(sAMAccountName=" + AccountName + "))")
         conn.search(
             LdapBase,
-            "(&(objectclass=user)(sAMAccountName=" + AccountName + "))",
+            loginbasestr,
             attributes=["memberOf"],
         )
         for user in sorted(conn.entries):
@@ -428,8 +433,7 @@ def command(command):
 def ProcessCommand(command):
 
     try:
-        # LogError(request.url)
-        if command in [
+        command_list = [
             "status",
             "status_json",
             "outage",
@@ -468,7 +472,9 @@ def ProcessCommand(command):
             "fuel_log_clear",
             "notify_message",
             "set_button_command",
-        ]:
+        ]
+        # LogError(request.url)
+        if command in command_list:
             finalcommand = "generator: " + command
 
             try:
@@ -523,7 +529,7 @@ def ProcessCommand(command):
 
             except Exception as e1:
                 data = "Retry"
-                LogError("Error on command function: " + str(e1))
+                LogErrorLine("Error on command function: " + str(e1))
 
             if command in [
                 "status_json",
@@ -1064,7 +1070,7 @@ def GetAddOns():
                 "pushsound", return_type=str, default="updown"
             ),
             "string",
-            "Notification sound identifier. See https://pushover.net/api#sounds for a full list of sound IDs",
+            "Notification sound identifier. See https://pushover.net/api#sounds for a full list of sound IDs. All sounds must be lower case.",
             bounds="minmax:3:20",
             display_name="Push Sound",
         )
@@ -1268,7 +1274,16 @@ def GetAddOns():
                 "numeric_json", return_type=bool, default=False
             ),
             "boolean",
-            "If enabled will return numeric values in the Status, Maintenance (Evo/Nexus only) and Outage topics as an object with unit, type and value members.",
+            "If enabled will return numeric values in the Status, Maintenance and Outage topics as separate topics for unit, type and value.",
+            bounds="",
+            display_name="Numeric Topics",
+        )
+        AddOnCfg["genmqtt"]["parameters"]["numeric_json_object"] = CreateAddOnParam(
+            ConfigFiles[GENMQTT_CONFIG].ReadValue(
+                "numeric_json_object", return_type=bool, default=False
+            ),
+            "boolean",
+            "If enabled will return a JSON object for numeric values in the Status, Maintenance and Outage topics as an object with unit, type and value members.",
             bounds="",
             display_name="JSON for Numerics",
         )
@@ -1290,6 +1305,15 @@ def GetAddOns():
             bounds="",
             display_name="Remove Spaces in Topic Path",
         )
+        AddOnCfg["genmqtt"]["parameters"]["retain"] = CreateAddOnParam(
+            ConfigFiles[GENMQTT_CONFIG].ReadValue(
+                "retain", return_type=bool, default=False
+            ),
+            "boolean",
+            "If enabled, published messages will be retained by the MQTT broker server after a the Add On disconnects from the server.",
+            bounds="",
+            display_name="Retain Data",
+        )
         AddOnCfg["genmqtt"]["parameters"]["cert_authority_path"] = CreateAddOnParam(
             ConfigFiles[GENMQTT_CONFIG].ReadValue(
                 "cert_authority_path", return_type=str, default=""
@@ -1298,6 +1322,24 @@ def GetAddOns():
             "(Optional) Full path to Certificate Authority file. Leave empty to not use SSL/TLS. If used port will be forced to 8883.",
             bounds="",
             display_name="SSL/TLS CA certificate file",
+        )
+        AddOnCfg["genmqtt"]["parameters"]["client_cert_path"] = CreateAddOnParam(
+            ConfigFiles[GENMQTT_CONFIG].ReadValue(
+                "client_cert_path", return_type=str, default=""
+            ),
+            "string",
+            "Optional. Full path the client certificate file. Leave empty to not use MTLS.",
+            bounds="",
+            display_name="Client Certificate File",
+        )
+        AddOnCfg["genmqtt"]["parameters"]["client_key_path"] = CreateAddOnParam(
+            ConfigFiles[GENMQTT_CONFIG].ReadValue(
+                "client_key_path", return_type=str, default=""
+            ),
+            "string",
+            "Optional. Full path the client key file. Leave empty to not use MTLS.",
+            bounds="",
+            display_name="Client Key File",
         )
         AddOnCfg["genmqtt"]["parameters"]["tls_version"] = CreateAddOnParam(
             ConfigFiles[GENMQTT_CONFIG].ReadValue(
@@ -1322,11 +1364,198 @@ def GetAddOns():
                 "client_id", return_type=str, default="genmon"
             ),
             "string",
-            "Unique identifier. Must be unique for each instance of genmon running on a given system. ",
+            "Unique identifier. Must be unique for each instance of genmon and add on running on a given system. ",
             bounds="",
             display_name="Client ID",
         )
 
+        # GENMQTTIN
+        AddOnCfg["genmqttin"] = collections.OrderedDict()
+        AddOnCfg["genmqttin"]["enable"] = ConfigFiles[GENLOADER_CONFIG].ReadValue(
+            "enable", return_type=bool, section="genmqttin", default=False
+        )
+        AddOnCfg["genmqttin"]["title"] = "MQTT Sensor Input"
+        AddOnCfg["genmqttin"][
+            "description"
+        ] = "Import data from MQTT broker for genmon use"
+        AddOnCfg["genmqttin"]["icon"] = "mqtt"
+        AddOnCfg["genmqttin"][
+            "url"
+        ] = "https://github.com/jgyates/genmon/wiki/1----Software-Overview#genmqttinpy-optional"
+        AddOnCfg["genmqttin"]["parameters"] = collections.OrderedDict()
+
+        AddOnCfg["genmqttin"]["parameters"]["topics"] = CreateAddOnParam(
+            ConfigFiles[GENMQTTIN_CONFIG].ReadValue(
+                "topics", return_type=str, default=""
+            ),
+            "string",
+            "Comma separated list of MQTT topics to subscribe and import into genmon. All topics must return a numeric value or a string representation of a numeric value.",
+            bounds="",
+            display_name="Topics",
+        )
+        AddOnCfg["genmqttin"]["parameters"]["labels"] = CreateAddOnParam(
+            ConfigFiles[GENMQTTIN_CONFIG].ReadValue(
+                "labels", return_type=str, default=""
+            ),
+            "string",
+            "Comma separated list of display names for each topic listed above. These will be the displayed label for each topic value.",
+            bounds="",
+            display_name="Displayed Name",
+        )
+        AddOnCfg["genmqttin"]["parameters"]["units"] = CreateAddOnParam(
+            ConfigFiles[GENMQTTIN_CONFIG].ReadValue(
+                "units", return_type=str, default=""
+            ),
+            "string",
+            "Comma separated list of units for each topic listed above. If no labled is used for a given topic, use a space. If using the imported MQTT data for genmon calculations, for power use W or kW, for current use A, for voltage use V. ",
+            bounds="",
+            display_name="Units",
+        )
+        AddOnCfg["genmqttin"]["parameters"]["types"] = CreateAddOnParam(
+            ConfigFiles[GENMQTTIN_CONFIG].ReadValue(
+                "types", return_type=str, default=""
+            ),
+            "string",
+            "Comma separated list of value types for each topic listed above. Valid types are: ct1,ct2,ctpower1,ctpower2,fuel,temperature,power,current,voltage or pressure. See the wiki entry for this add on for more details.",
+            bounds="",
+            display_name="Sensor Type",
+        )
+        AddOnCfg["genmqttin"]["parameters"]["exclude_gauge"] = CreateAddOnParam(
+            ConfigFiles[GENMQTTIN_CONFIG].ReadValue(
+                "exclude_gauge", return_type=str, default=""
+            ),
+            "string",
+            "Comma separated list of Displayed Names that will not be displayed as a gauge. If you enable 'Use Data for Calculations' then you can remove duplicate gagues with this setting if they show up in the user interface.",
+            bounds="",
+            display_name="Exclude Gauge",
+        )
+        AddOnCfg["genmqttin"]["parameters"]["nominal_values"] = CreateAddOnParam(
+            ConfigFiles[GENMQTTIN_CONFIG].ReadValue(
+                "nominal_values", return_type=str, default=""
+            ),
+            "string",
+            "Comma separated list of nominal values for each topic listed above.",
+            bounds="",
+            display_name="Nominal Values",
+        )
+        AddOnCfg["genmqttin"]["parameters"]["maximum_values"] = CreateAddOnParam(
+            ConfigFiles[GENMQTTIN_CONFIG].ReadValue(
+                "maximum_values", return_type=str, default=""
+            ),
+            "string",
+            "Comma separated list of maximum values for each topic listed above.",
+            bounds="",
+            display_name="Maximum Values",
+        )
+
+        AddOnCfg["genmqttin"]["parameters"]["use_for_power_fuel"] = CreateAddOnParam(
+            ConfigFiles[GENMQTTIN_CONFIG].ReadValue(
+                "use_for_power_fuel", return_type=bool, default=False
+            ),
+            "boolean",
+            "If enabled, the data from sensor types fuel,power,current,ct1,ct2,voltageleg1, voltageleg2, ctpower1 and ctpower2 will be imported and used for power and fuel calculations (instead of just displaying) within genmon.",
+            bounds="",
+            display_name="Use Data for Calculations",
+        )
+        AddOnCfg["genmqttin"]["parameters"]["strict"] = CreateAddOnParam(
+            ConfigFiles[GENMQTTIN_CONFIG].ReadValue(
+                "strict", return_type=bool, default=False
+            ),
+            "boolean",
+            "If enabled, genmon will only use Data for Calculations if the generator utility line is in an outage. If your sensors are connected after the transfer switch (i.e. utility and generator are monitored) the you will want to enable this setting to keep genmon from using the sensor readings when there is not an outage.",
+            bounds="",
+            display_name="Strict Import Rules",
+        )
+        AddOnCfg["genmqttin"]["parameters"]["mqtt_address"] = CreateAddOnParam(
+            ConfigFiles[GENMQTTIN_CONFIG].ReadValue(
+                "mqtt_address", return_type=str, default=""
+            ),
+            "string",
+            "Address of your MQTT server.",
+            bounds="required IPAddress",
+            display_name="MQTT Server Address",
+        )
+        AddOnCfg["genmqttin"]["parameters"]["mqtt_port"] = CreateAddOnParam(
+            ConfigFiles[GENMQTTIN_CONFIG].ReadValue(
+                "mqtt_port", return_type=int, default=1833
+            ),
+            "int",
+            "The port of the MQTT server in a decimal number.",
+            bounds="required digits",
+            display_name="MQTT Server Port Number",
+        )
+        AddOnCfg["genmqttin"]["parameters"]["username"] = CreateAddOnParam(
+            ConfigFiles[GENMQTTIN_CONFIG].ReadValue(
+                "username", return_type=str, default=""
+            ),
+            "string",
+            "This value is used for the username if your MQTT server requires authentication. Leave blank for no authentication.",
+            bounds="minmax:4:50",
+            display_name="MQTT Authentication Username",
+        )
+        AddOnCfg["genmqttin"]["parameters"]["password"] = CreateAddOnParam(
+            ConfigFiles[GENMQTTIN_CONFIG].ReadValue(
+                "password", return_type=str, default=""
+            ),
+            "password",
+            "This value is used for the password if your MQTT server requires authentication. Leave blank for no authentication or no password.",
+            bounds="minmax:4:50",
+            display_name="MQTT Authentication Password",
+        )
+        AddOnCfg["genmqttin"]["parameters"]["cert_authority_path"] = CreateAddOnParam(
+            ConfigFiles[GENMQTTIN_CONFIG].ReadValue(
+                "cert_authority_path", return_type=str, default=""
+            ),
+            "string",
+            "(Optional) Full path to Certificate Authority file. Leave empty to not use SSL/TLS. If used port will be forced to 8883.",
+            bounds="",
+            display_name="SSL/TLS CA certificate file",
+        )
+        AddOnCfg["genmqttin"]["parameters"]["client_cert_path"] = CreateAddOnParam(
+            ConfigFiles[GENMQTTIN_CONFIG].ReadValue(
+                "client_cert_path", return_type=str, default=""
+            ),
+            "string",
+            "Optional. Full path the client certificate file. Leave empty to not use MTLS.",
+            bounds="",
+            display_name="Client Certificate File",
+        )
+        AddOnCfg["genmqttin"]["parameters"]["client_key_path"] = CreateAddOnParam(
+            ConfigFiles[GENMQTTIN_CONFIG].ReadValue(
+                "client_key_path", return_type=str, default=""
+            ),
+            "string",
+            "Optional. Full path the client key file. Leave empty to not use MTLS.",
+            bounds="",
+            display_name="Client Key File",
+        )
+        AddOnCfg["genmqttin"]["parameters"]["tls_version"] = CreateAddOnParam(
+            ConfigFiles[GENMQTTIN_CONFIG].ReadValue(
+                "tls_version", return_type=str, default="1.0"
+            ),
+            "list",
+            "(Optional) TLS version used (integer). Default is 1.0. Must be 1.0, 1.1, or 1.2. This is ignored if a CA cert file is not used. ",
+            bounds="1.0,1.1,1.2",
+            display_name="TLS Version",
+        )
+        AddOnCfg["genmqttin"]["parameters"]["cert_reqs"] = CreateAddOnParam(
+            ConfigFiles[GENMQTTIN_CONFIG].ReadValue(
+                "cert_reqs", return_type=str, default="Required"
+            ),
+            "list",
+            "(Optional) Defines the certificate requirements that the client imposes on the broker. Used if Certificate Authority file is used.",
+            bounds="None,Optional,Required",
+            display_name="Certificate Requirements",
+        )
+        AddOnCfg["genmqttin"]["parameters"]["client_id"] = CreateAddOnParam(
+            ConfigFiles[GENMQTTIN_CONFIG].ReadValue(
+                "client_id", return_type=str, default="genmon"
+            ),
+            "string",
+            "Unique identifier. Must be unique for each instance of genmon and add on running on a given system. ",
+            bounds="",
+            display_name="Client ID",
+        )
         # GENSLACK
         AddOnCfg["genslack"] = collections.OrderedDict()
         AddOnCfg["genslack"]["enable"] = ConfigFiles[GENLOADER_CONFIG].ReadValue(
@@ -1379,7 +1608,7 @@ def GetAddOns():
         )
         AddOnCfg["genslack"]["parameters"]["title_link"] = CreateAddOnParam(
             ConfigFiles[GENSLACK_CONFIG].ReadValue(
-                "title_link", return_type=str, default=request.url_root
+                "title_link", return_type=str, default=""
             ),
             "string",
             "Use this to make the title of the message a link i.e. link to the genmon web interface.",
@@ -1411,7 +1640,7 @@ def GetAddOns():
             ),
             "list",
             "Type of CallMeBot Notifications. For more information, see http://www.callmebot.com.",
-            bounds="WhatsApp,Telegram",  # Facebook, Signal
+            bounds="WhatsApp,Telegram,Signal",  # Facebook, 
             display_name="Notification Type",
         )
         AddOnCfg["gencallmebot"]["parameters"]["api_key"] = CreateAddOnParam(
@@ -1436,7 +1665,7 @@ def GetAddOns():
                 "recipient_number", return_type=str, default="+1XXXXXXXXXX"
             ),
             "string",
-            "Recipient Number requried for WhatsApp Notification. Must be without spaces and start with a plus",
+            "Recipient Number requried for WhatsApp Notification. Must be without spaces and start with a plus. For Signal this must be the numeric key sent to your signal account when registering with CallMeBot (in the form xxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx)",
             bounds="",
             display_name="Recipient Number",
         )
@@ -1466,7 +1695,7 @@ def GetAddOns():
                     "exercise_type", return_type=str, default="Normal"
                 ),
                 "list",
-                "Quiet Exercise (reduced RPM, Hz and Voltage), Normal Exercise or Exercise with Transfer Switch Activated.",
+                "Quiet Exercise (reduced RPM, Hz and Voltage), Normal Exercise, Exercise with Transfer Switch Activated.",
                 bounds="Quiet,Normal,Transfer",
                 display_name="Exercise Type",
             )
@@ -1477,8 +1706,8 @@ def GetAddOns():
                     "exercise_frequency", return_type=str, default="Monthly"
                 ),
                 "list",
-                "Exercise Frequency options are Weekly, Biweekly, or Monthly",
-                bounds="Weekly,Biweekly,Monthly",
+                "Exercise Frequency options are Daily, Weekly, Biweekly,Monthly  or Post-Controller (immediately after the controller exercise cycle). Hour, Minute, Month, Day of Week are ignored if Post-Controller exercise frequency is enabled.",
+                bounds="Daily,Weekly,Biweekly,Monthly,Post-Controller",
                 display_name="Exercise Frequency",
             )
             AddOnCfg["genexercise"]["parameters"]["use_gen_time"] = CreateAddOnParam(
@@ -1638,6 +1867,24 @@ def GetAddOns():
             "The duration in minutes between poll of tank data.",
             bounds="number",
             display_name="Poll Frequency",
+        )
+        AddOnCfg["gentankutil"]["parameters"]["check_battery"] = CreateAddOnParam(
+            ConfigFiles[GENTANKUTIL_CONFIG].ReadValue(
+                "check_battery", return_type=bool, default=False
+            ),
+            "boolean",
+            "If enabled, and email will be sent if the battery level on the sensor is critical. Outbound email must be enabled for this to function.",
+            bounds="",
+            display_name="Check Sensor Battery",
+        )
+        AddOnCfg["gentankutil"]["parameters"]["check_reading"] = CreateAddOnParam(
+            ConfigFiles[GENTANKUTIL_CONFIG].ReadValue(
+                "check_reading", return_type=bool, default=False
+            ),
+            "boolean",
+            "If enabled, and email will be sent if the sensor has not performed a reading within 50 hours. Outbound email must be enabled for this to function.",
+            bounds="",
+            display_name="Check for Missed Readings",
         )
 
         # GENTANKDIY
@@ -1824,7 +2071,7 @@ def GetAddOns():
                 "device_nominal_values", return_type=str, default=""
             ),
             "string",
-            "Comma separated list of nominal temperature values for the sensos. The order of these values must match the order of the Sensor Names. Leave blank to disable External Temp Sensor gauges.",
+            "Comma separated list of nominal temperature values for the sensor. Nominal values help determine where the gauge green area ends and the yellow begins. The order of these values must match the order of the Sensor Names. Leave blank to disable External Temp Sensor gauges.",
             bounds="",
             display_name="Sensor Nominal Values",
         )
@@ -1833,9 +2080,18 @@ def GetAddOns():
                 "device_max_values", return_type=str, default=""
             ),
             "string",
-            "Comma separated list of maximum temperature values for the sensos. The order of these values must match the order of the Sensor Names. Leave blank to disable External Temp Sensor gauges.",
+            "Comma separated list of maximum temperature values for the sensor. This is the maximum gauge value. The order of these values must match the order of the Sensor Names. Leave blank to disable External Temp Sensor gauges.",
             bounds="",
             display_name="Sensor Maximum Values",
+        )
+        AddOnCfg["gentemp"]["parameters"]["device_min_values"] = CreateAddOnParam(
+            ConfigFiles[GENTEMP_CONFIG].ReadValue(
+                "device_min_values", return_type=str, default=""
+            ),
+            "string",
+            "Comma separated list of minimum temperature values for the sensor. This is the minimum gauge value. The order of these values must match the order of the Sensor Names. Leave blank to set all sensors minimum value to zero.",
+            bounds="",
+            display_name="Sensor Minimum Values",
         )
         # GENSENSORHAT
         AddOnCfg["gencthat"] = collections.OrderedDict()
@@ -1881,7 +2137,6 @@ def GetAddOns():
             Description = "Support Mopeka Pro Propane Tanks Sensor"
             try:
                 import fluids
-                import mopeka_pro_check
             except Exception as e1:
                 Description = (
                     Description
@@ -1906,7 +2161,7 @@ def GetAddOns():
                     "poll_frequency", return_type=float, default=60
                 ),
                 "float",
-                "The time in minutes that the sensors are polled. The default value is 60 seconds.",
+                "The time in minutes that the sensors are polled. The default value is 60 minutes.",
                 bounds="number",
                 display_name="Poll Interval",
             )
@@ -2022,6 +2277,15 @@ def AddRetryAddOnParam(AddOnCfg, addon_name, config_file):
             description="The number of seconds to wait before retrying a failed message.",
             display_name="Retry Interval (seconds)",
         )
+        # This paramerter is not exposed but a valid conf file setting
+        #AddOnCfg[addon_name]["parameters"]["minimum_wait_between_messages"] = CreateAddOnParam(
+        #    value=ConfigFiles[config_file].ReadValue(
+        #        "minimum_wait_between_messages", return_type=int, default=0
+        #    ),
+        #    type="int",
+        #    description="The minimum of seconds to wait between sending a message. This is typically zero, except for Callmebot Signal Messaging (should be at least 2 seconds) or other messaging apps that have minimum delays.",
+        #    display_name="Min Time Between Messages (seconds)",
+        #)
     except Exception as e1:
         LogErrorLine("Error in AddRetryAddOnParam: " + str(e1))
     return AddOnCfg
@@ -2091,6 +2355,7 @@ def SaveAddOnSettings(query_string):
             "gensms_modem": ConfigFiles[MYMODEM_CONFIG],
             "genpushover": ConfigFiles[GENPUSHOVER_CONFIG],
             "genmqtt": ConfigFiles[GENMQTT_CONFIG],
+            "genmqttin": ConfigFiles[GENMQTTIN_CONFIG],
             "genslack": ConfigFiles[GENSLACK_CONFIG],
             "gencallmebot": ConfigFiles[GENCALLMEBOT_CONFIG],
             "genlog": ConfigFiles[GENLOADER_CONFIG],
@@ -2342,7 +2607,7 @@ def ReadAdvancedSettingsFromFile():
             5,
             ProgramDefaults.ServerPort,
             "",
-            0,
+            "digits",
             GENMON_CONFIG,
             GENMON_SECTION,
             "server_port",
@@ -2376,7 +2641,7 @@ def ReadAdvancedSettingsFromFile():
             8,
             "0.0",
             "",
-            0,
+            "number",
             GENMON_CONFIG,
             GENMON_SECTION,
             "additional_modbus_timeout",
@@ -2398,7 +2663,7 @@ def ReadAdvancedSettingsFromFile():
             10,
             9600,
             "",
-            0,
+            "digits",
             GENMON_CONFIG,
             GENMON_SECTION,
             "serial_rate",
@@ -2431,7 +2696,7 @@ def ReadAdvancedSettingsFromFile():
             13,
             "0.0",
             "",
-            0,
+            "number",
             GENMON_CONFIG,
             GENMON_SECTION,
             "watchdog_addition",
@@ -2460,10 +2725,21 @@ def ReadAdvancedSettingsFromFile():
             GENMON_SECTION,
             "import_config_file",
         ]
+        ConfigSettings["phase"] = [
+            "int",
+            "Generator Phase",
+            22,
+            "1",
+            "",
+            "number",
+            GENMON_CONFIG,
+            GENMON_SECTION,
+            "phase",
+        ]
         ConfigSettings["loglocation"] = [
             "string",
             "Log Directory",
-            22,
+            23,
             ProgramDefaults.LogPath,
             "",
             "required UnixDir",
@@ -2474,7 +2750,7 @@ def ReadAdvancedSettingsFromFile():
         ConfigSettings["userdatalocation"] = [
             "string",
             "User Defined Data Directory",
-            23,
+            24,
             os.path.dirname(os.path.realpath(__file__)),
             "",
             "required UnixDir",
@@ -2523,12 +2799,12 @@ def ReadAdvancedSettingsFromFile():
             "serialnumberifmissing",
         ]
         ConfigSettings["additionalrunhours"] = [
-            "string",
+            "float",
             "Additional Run Hours",
             37,
             "",
             "",
-            0,
+            "number",
             GENMON_CONFIG,
             GENMON_SECTION,
             "additionalrunhours",
@@ -2550,11 +2826,23 @@ def ReadAdvancedSettingsFromFile():
             39,
             "0.0",
             "",
-            0,
+            "number",
             GENMON_CONFIG,
             GENMON_SECTION,
             "subtractfuel",
         ]
+        if ControllerType == "generac_evo_nexus":
+            ConfigSettings["unbalanced_capacity"] = [
+                "float",
+                "Unbalanced Load Capacity",
+                46,
+                "0",
+                "",
+                "range:0:0.50",
+                GENMON_CONFIG,
+                GENMON_SECTION,
+                "unbalanced_capacity",
+            ]
         # ConfigSettings["kwlog"] = ['string', 'Power Log Name / Disable', 36, "", "", 0, GENMON_CONFIG, GENMON_SECTION, "kwlog"]
         if ControllerType != "h_100":
             ConfigSettings["usenominallinevolts"] = [
@@ -2574,7 +2862,7 @@ def ReadAdvancedSettingsFromFile():
                 46,
                 "240",
                 "",
-                0,
+                "digits",
                 GENMON_CONFIG,
                 GENMON_SECTION,
                 "nominallinevolts",
@@ -2585,7 +2873,7 @@ def ReadAdvancedSettingsFromFile():
                 47,
                 "0",
                 "",
-                0,
+                "digits",
                 GENMON_CONFIG,
                 GENMON_SECTION,
                 "outage_notice_delay",
@@ -2596,17 +2884,28 @@ def ReadAdvancedSettingsFromFile():
                 48,
                 "0",
                 "",
-                0,
+                "digits",
                 GENMON_CONFIG,
                 GENMON_SECTION,
                 "min_outage_duration",
+            ]
+            ConfigSettings["outage_notice_interval"] = [
+                "int",
+                "Outage Recurring Notice Interval (minutes)",
+                49,
+                "0",
+                "",
+                "digits",
+                GENMON_CONFIG,
+                GENMON_SECTION,
+                "outage_notice_interval",
             ]
             ControllerInfo = GetControllerInfo("controller").lower()
             if "nexus" in ControllerInfo:
                 ConfigSettings["nexus_legacy_freq"] = [
                     "boolean",
                     "Use Nexus Legacy Frequency",
-                    49,
+                    50,
                     True,
                     "",
                     0,
@@ -2646,7 +2945,7 @@ def ReadAdvancedSettingsFromFile():
             56,
             "0.0",
             "",
-            0,
+            "number",
             GENMON_CONFIG,
             GENMON_SECTION,
             "half_rate",
@@ -2657,7 +2956,7 @@ def ReadAdvancedSettingsFromFile():
             57,
             "0.0",
             "",
-            0,
+            "number",
             GENMON_CONFIG,
             GENMON_SECTION,
             "full_rate",
@@ -2680,7 +2979,7 @@ def ReadAdvancedSettingsFromFile():
             61,
             "15.0",
             "",
-            0,
+            "number",
             GENMON_CONFIG,
             GENMON_SECTION,
             "fuel_log_freq",
@@ -2698,24 +2997,36 @@ def ReadAdvancedSettingsFromFile():
             GENMON_SECTION,
             "kwlogmax",
         ]
+        ConfigSettings["max_powerlog_entries"] = [
+            "int",
+            "Maximum Entries in Power Log",
+            71,
+            "4000",
+            "digits",
+            0,
+            GENMON_CONFIG,
+            GENMON_SECTION,
+            "min_powerlog_entries",
+        ]
+        
         ConfigSettings["currentdivider"] = [
             "float",
             "Current Divider",
-            71,
+            72,
             "",
             "",
-            0,
+            "number",
             GENMON_CONFIG,
             GENMON_SECTION,
             "currentdivider",
         ]
         ConfigSettings["currentoffset"] = [
-            "string",
+            "float",
             "Current Offset",
-            72,
+            73,
             "",
             "",
-            0,
+            "number",
             GENMON_CONFIG,
             GENMON_SECTION,
             "currentoffset",
@@ -2723,7 +3034,7 @@ def ReadAdvancedSettingsFromFile():
         ConfigSettings["legacy_power"] = [
             "boolean",
             "Use Legacy Power Calculation",
-            73,
+            74,
             False,
             "",
             0,
@@ -2749,7 +3060,7 @@ def ReadAdvancedSettingsFromFile():
             81,
             "",
             "",
-            0,
+            "digits",
             GENMON_CONFIG,
             GENMON_SECTION,
             "https_port",
@@ -2771,7 +3082,7 @@ def ReadAdvancedSettingsFromFile():
             83,
             "0",
             "",
-            0,
+            "digits",
             MAIL_CONFIG,
             MAIL_SECTION,
             "extend_wait",
@@ -3022,28 +3333,29 @@ def ReadSettingsFromFile():
             "disableoutagecheck",
         ]
 
-    ConfigSettings["syncdst"] = [
-        "boolean",
-        "Sync Daylight Savings Time",
-        22,
-        False,
-        "",
-        "",
-        GENMON_CONFIG,
-        GENMON_SECTION,
-        "syncdst",
-    ]
-    ConfigSettings["synctime"] = [
-        "boolean",
-        "Sync Time",
-        23,
-        False,
-        "",
-        "",
-        GENMON_CONFIG,
-        GENMON_SECTION,
-        "synctime",
-    ]
+    if GStartInfo["SetGenTime"]:
+        ConfigSettings["syncdst"] = [
+            "boolean",
+            "Sync Daylight Savings Time",
+            22,
+            False,
+            "",
+            "",
+            GENMON_CONFIG,
+            GENMON_SECTION,
+            "syncdst",
+        ]
+        ConfigSettings["synctime"] = [
+            "boolean",
+            "Sync Time",
+            23,
+            False,
+            "",
+            "",
+            GENMON_CONFIG,
+            GENMON_SECTION,
+            "synctime",
+        ]
     ConfigSettings["metricweather"] = [
         "boolean",
         "Use Metric Units",
@@ -3150,7 +3462,7 @@ def ReadSettingsFromFile():
         105,
         "0",
         "",
-        "required digits range:0:2000",
+        "required digits range:0:10000",
         GENMON_CONFIG,
         GENMON_SECTION,
         "tanksize",
@@ -3187,17 +3499,6 @@ def ReadSettingsFromFile():
             GENMON_SECTION,
             "voltageconfiguration",
         ]
-        ConfigSettings["nominalbattery"] = [
-            "list",
-            "Nomonal Battery Voltage",
-            108,
-            "24",
-            "",
-            "12,24",
-            GENMON_CONFIG,
-            GENMON_SECTION,
-            "nominalbattery",
-        ]
         ConfigSettings["hts_transfer_switch"] = [
             "boolean",
             "HTS/MTS/STS Transfer Switch",
@@ -3232,6 +3533,19 @@ def ReadSettingsFromFile():
             GENMON_SECTION,
             "enhancedexercise",
         ]
+    
+    if ControllerType == "custom":
+        ConfigSettings["nominalbattery"] = [
+                "list",
+                "Nomonal Battery Voltage",
+                108,
+                "24",
+                "",
+                "12,24",
+                GENMON_CONFIG,
+                GENMON_SECTION,
+                "nominalbattery",
+            ]
 
     ConfigSettings["smart_transfer_switch"] = [
         "boolean",
@@ -3434,7 +3748,7 @@ def ReadSettingsFromFile():
         302,
         "password",
         "",
-        "max:50",
+        "max:70",
         MAIL_CONFIG,
         MAIL_SECTION,
         "email_pw",
@@ -3741,9 +4055,9 @@ def CacheToolTips():
             except Exception as e1:
                 LogError("Error reading Controller Type for H-100: " + str(e1))
         if not foundRegText:
-            CachedRegisterDescriptions = GetAllConfigValues(
+            CachedRegisterDescriptions = {"Holding":GetAllConfigValues(
                 os.path.join(pathtofile, "data", "tooltips.txt"), config_section
-            )
+            )}
 
         CachedToolTips = GetAllConfigValues(
             os.path.join(pathtofile, "data", "tooltips.txt"), "ToolTips"
@@ -4039,6 +4353,9 @@ def LoadConfig():
             bUseSecureHTTP = ConfigFiles[GENMON_CONFIG].ReadValue(
                 "usehttps", return_type=bool
             )
+        if not bUseSecureHTTP:
+            # dont use MFA unless HTTPS is enabled
+            bUseMFA = False
 
         ListenIPAddress = ConfigFiles[GENMON_CONFIG].ReadValue("flask_listen_ip_address", default="0.0.0.0")
         
@@ -4132,8 +4449,8 @@ def LoadConfig():
                 "https_port", return_type=int, default=443
             )
 
+        app.secret_key = os.urandom(12)
         if bUseSecureHTTP:
-            app.secret_key = os.urandom(12)
             OldHTTPPort = HTTPPort
             HTTPPort = HTTPSPort
             if ConfigFiles[GENMON_CONFIG].HasOption("useselfsignedcert"):
@@ -4288,6 +4605,7 @@ if __name__ == "__main__":
     MYMODEM_CONFIG = os.path.join(ConfigFilePath, "mymodem.conf")
     GENPUSHOVER_CONFIG = os.path.join(ConfigFilePath, "genpushover.conf")
     GENMQTT_CONFIG = os.path.join(ConfigFilePath, "genmqtt.conf")
+    GENMQTTIN_CONFIG = os.path.join(ConfigFilePath, "genmqttin.conf")
     GENSLACK_CONFIG = os.path.join(ConfigFilePath, "genslack.conf")
     GENCALLMEBOT_CONFIG = os.path.join(ConfigFilePath, "gencallmebot.conf")
     GENGPIOIN_CONFIG = os.path.join(ConfigFilePath, "gengpioin.conf")
@@ -4311,6 +4629,7 @@ if __name__ == "__main__":
         MYMODEM_CONFIG,
         GENPUSHOVER_CONFIG,
         GENMQTT_CONFIG,
+        GENMQTTIN_CONFIG,
         GENSLACK_CONFIG,
         GENCALLMEBOT_CONFIG,
         GENGPIOIN_CONFIG,
@@ -4357,6 +4676,8 @@ if __name__ == "__main__":
         + str(bUseSecureHTTP)
         + ", SelfSignedCert: "
         + str(bUseSelfSignedCert)
+        + ", UseMFA:"
+        + str(bUseMFA)
     )
     # validate needed files are present
     filename = os.path.join(

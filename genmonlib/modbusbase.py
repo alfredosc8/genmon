@@ -73,7 +73,7 @@ class ModbusBase(MySupport):
         + MBUS_RECORD_LENGTH_SIZE
     )
     MIN_PACKET_ERR_LENGTH = 0x05
-    MIN_PACKET_RESPONSE_LENGTH = 0x07
+    MIN_PACKET_RESPONSE_LENGTH = 0x06           # change from 7 to 6 to accomiadate coil reads
     MIN_PACKET_MIN_WRITE_RESPONSE_LENGTH = 0x08
     MBUS_READ_FILE_REQUEST_PAYLOAD_LENGTH = 0x07
     MIN_REQ_PACKET_LENGTH = 0x08
@@ -88,8 +88,9 @@ class ModbusBase(MySupport):
     MAX_FILE_NUMBER = 0xFFFF
     MIN_FILE_NUMBER = 0x01
     # commands
-    MBUS_CMD_READ_REGS = 0x03  # Read Holding Registers
-    MBUS_CMD_READ_INPUT_REGS = 0x04  # Read Input Registers
+    MBUS_CMD_READ_COILS = 0x01          # Read Coils
+    MBUS_CMD_READ_REGS = 0x03           # Read Holding Registers
+    MBUS_CMD_READ_INPUT_REGS = 0x04     # Read Input Registers
     MBUS_CMD_WRITE_REGS = 0x10
     MBUS_CMD_READ_FILE = 0x14
     MBUS_CMD_WRITE_FILE = 0x15
@@ -107,8 +108,8 @@ class ModbusBase(MySupport):
     MBUS_EXCEP_BUSY = 0x06  # Slave Device Busy
     MBUS_EXCEP_NACK = 0x07  # Negative Acknowledge
     MBUS_EXCEP_MEM_PE = 0x08  # Memory Parity Error
-    MBUS_EXCEP_GATEWAY = 0x10  # Gateway Path Unavailable
-    MBUS_EXCEP_GATEWAY_TG = 0x11  # Gateway Target Device Failed to Respond
+    MBUS_EXCEP_GATEWAY = 0x0a  # Gateway Path Unavailable
+    MBUS_EXCEP_GATEWAY_TG = 0x0b  # Gateway Target Device Failed to Respond
 
     # -------------------------__init__------------------------------------------
     def __init__(
@@ -152,9 +153,7 @@ class ModbusBase(MySupport):
         self.UseTCP = False
         self.AdditionalModbusTimeout = 0
         self.ModBusPacketTimoutMS = 0
-        self.ResponseAddress = (
-            None  # Used if recieve packes have a different address than sent packets
-        )
+        self.ResponseAddress = None  # Used if recieve packes have a different address than sent packets
         self.debug = False
         self.UseModbusFunction4 = use_fc4
 
@@ -192,7 +191,7 @@ class ModbusBase(MySupport):
             except:
                 self.Address = 0x9D
             self.AdditionalModbusTimeout = self.config.ReadValue(
-                "additional_modbus_timeout", return_type=float, default=0.0
+                "additional_modbus_timeout", return_type=float, default=0.0, NoLog=True
             )
             ResponseAddressStr = self.config.ReadValue("response_address", default=None)
             if ResponseAddressStr != None:
@@ -227,7 +226,7 @@ class ModbusBase(MySupport):
 
     # -------------ModbusBase::ProcessTransaction--------------------------------
     def ProcessTransaction(
-        self, Register, Length, skipupdate=False, ReturnString=False
+        self, Register, Length, skipupdate=False, ReturnString=False, IsCoil = False, IsInput = False
     ):
         return
 

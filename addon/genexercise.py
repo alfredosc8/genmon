@@ -68,7 +68,8 @@ class GenExercise(MySupport):
         self.MonitorAddress = host
         self.PollTime = 2
         self.ExerciseActive = False
-        self.Debug = False
+        self.debug = False
+        self.ControllerExercise = False
 
         try:
             self.config = MyConfig(
@@ -102,11 +103,14 @@ class GenExercise(MySupport):
             self.MonitorAddress = self.config.ReadValue(
                 "monitor_address", default=ProgramDefaults.LocalHost
             )
-            self.LastExerciseTime = self.config.ReadValue("last_exercise", default=None)
-            self.UseGeneratorTime = self.config.ReadValue(
-                "use_gen_time", return_type=bool, default=False
+            self.ExerciseNthDayOfMonth = self.config.ReadValue(
+                "exercise_nth_day_of_month", return_type=int, default=0
             )
-            self.Debug = self.config.ReadValue("debug", return_type=bool, default=False)
+
+            self.LastExerciseTime = self.config.ReadValue("last_exercise", default=None)
+            self.UseGeneratorTime = self.config.ReadValue("use_gen_time", return_type=bool, default=False)
+
+            self.debug = self.config.ReadValue("debug", return_type=bool, default=False)
 
             # Validate settings
             if not self.ExerciseType.lower() in ["normal", "quiet", "transfer"]:
@@ -135,12 +139,22 @@ class GenExercise(MySupport):
                 self.ExerciseWarmup = 30
             if self.ExerciseWarmup < 0:
                 self.ExerciseWarmup = 0
-            if not self.ExerciseFrequency.lower() in ["weekly", "biweekly", "monthly"]:
+            if not self.ExerciseFrequency.lower() in ["daily","weekly", "biweekly", "monthly", "post-controller"]:
                 self.ExerciseFrequency = "Monthly"
+
+            if self.MonitorAddress != None:
+                self.MonitorAddress = self.MonitorAddress.strip()
 
             if self.MonitorAddress == None or not len(self.MonitorAddress):
                 self.MonitorAddress = ProgramDefaults.LocalHost
 
+            if self.ExerciseNthDayOfMonth > 5 or self.ExerciseNthDayOfMonth < 1:
+                self.ExerciseNthDayOfMonth = 0
+            if self.ExerciseFrequency.lower() == "monthly":
+                if self.ExerciseNthDayOfMonth == 0:
+                    self.LogDebug("Monthly Day of Month option used")
+                else:
+                    self.LogDebug("Exercise monthly on the %d x %s" %(self.ExerciseNthDayOfMonth, self.ExerciseDayOfWeek))
         except Exception as e1:
             self.LogErrorLine(
                 "Error reading "
@@ -166,35 +180,65 @@ class GenExercise(MySupport):
                 self.LogError("Requirements not met. Exiting.")
                 sys.exit(1)
 
+            status = self.SendCommand("generator: getbase")
+            if status.lower() in ["exercising"]:
+                self.SendCommand("generator: setremote=stop")
             # start thread monitor time for exercise
-            self.Threads["ExerciseThread"] = MyThread(
-                self.ExerciseThread, Name="ExerciseThread", start=False
-            )
-            self.Threads["ExerciseThread"].Start()
+            if self.ExerciseFrequency.lower() in ["daily","weekly","biweekly","monthly"]:
+                self.Threads["ExerciseThread"] = MyThread(
+                    self.ExerciseThread, Name="ExerciseThread", start=False)
+                self.Threads["ExerciseThread"].Start()
+            elif self.ExerciseFrequency.lower() in ["post-controller"]:
+                self.Threads["PostExerciseThread"] = MyThread(
+                    self.PostExerciseThread, Name="PostExerciseThread", start=False)
+                self.Threads["PostExerciseThread"].Start()
+            else:
+                self.LogError("Exiting: Invalid exercise frequency: " + str(self.ExerciseFrequency))
+                sys.exit(1)
 
             try:
                 if self.ExerciseFrequency.lower() == "monthly":
-                    DayStr = "Day " + str(self.ExerciseDayOfMonth)
+                    if self.ExerciseNthDayOfMonth == 0:
+                        DayStr = "Day " + str(self.ExerciseDayOfMonth)
+                    else:
+                        DayStr = str(self.ExerciseDayOfWeek) + " X " + str(self.ExerciseNthDayOfMonth)
                 else:
                     DayStr = str(self.ExerciseDayOfWeek)
-
-                self.LogError(
-                    "Execise: "
-                    + self.ExerciseType
-                    + ", "
-                    + self.ExerciseFrequency
-                    + " at "
-                    + str(self.ExerciseHour)
-                    + ":"
-                    + str(self.ExerciseMinute)
-                    + " on "
-                    + DayStr
-                    + " for "
-                    + str(self.ExerciseDuration)
-                    + " min. Warmup: "
-                    + str(self.ExerciseWarmup)
-                )
-                self.DebugOutput("Debug Enabled")
+                if self.ExerciseFrequency.lower() in ["weekly","biweekly","monthly"]:
+                    self.LogError(
+                        "Exercise: "
+                        + self.ExerciseType
+                        + ", "
+                        + self.ExerciseFrequency
+                        + " at "
+                        + str(self.ExerciseHour)
+                        + ":"
+                        + str(self.ExerciseMinute)
+                        + " on "
+                        + DayStr
+                        + " for "
+                        + str(self.ExerciseDuration)
+                        + " min. Warmup: "
+                        + str(self.ExerciseWarmup)
+                    )
+                elif self.ExerciseFrequency.lower() in ["daily"]:
+                    self.LogError(
+                        "Exercise: "
+                        + self.ExerciseType
+                        + ", "
+                        + self.ExerciseFrequency
+                        + " at "
+                        + str(self.ExerciseHour)
+                        + ":"
+                        + str(self.ExerciseMinute)
+                        + " for "
+                        + str(self.ExerciseDuration)
+                        + " min. Warmup: "
+                        + str(self.ExerciseWarmup)
+                    )
+                elif self.ExerciseFrequency.lower() in ["post-controller"]:
+                    self.LogError("Exercise: post controller exercise, " + self.ExerciseType + ", " + "for " + str(self.ExerciseDuration))
+                self.LogDebug("Debug Enabled")
             except Exception as e1:
                 self.LogErrorLine(str(e1))
 
@@ -255,7 +299,7 @@ class GenExercise(MySupport):
             return
 
         self.SendCommand("generator: setremote=starttransfer")
-        self.DebugOutput("Starting transfer exercise cycle (post warmup).")
+        self.LogDebug("Starting transfer exercise cycle (post warmup).")
         # set timer to stop
         self.StopTimer = threading.Timer(
             float(self.ExerciseDuration * 60.0), self.StopExercise
@@ -267,10 +311,7 @@ class GenExercise(MySupport):
 
         status = self.SendCommand("generator: getbase")
         if not status.lower() in ["ready", "servicedue"]:
-            self.LogError(
-                "Generator not in Ready state, exercise cycle not started: "
-                + str(status)
-            )
+            self.LogError("Generator not in Ready state, exercise cycle not started: " + str(status))
             return False
         return True
 
@@ -282,16 +323,19 @@ class GenExercise(MySupport):
             return
 
         # Start generator
+        if not self.ReadyToExercise():
+            return
+        
         if self.ExerciseType.lower() == "normal" and self.ReadyToExercise():
             self.SendCommand("generator: setremote=start")
-            self.DebugOutput("Starting normal exercise cycle.")
+            self.LogDebug("Starting normal exercise cycle.")
             self.StopTimer = threading.Timer(
                 float(self.ExerciseDuration * 60.0), self.StopExercise
             )
             self.StopTimer.start()
         elif self.ExerciseType.lower() == "quiet" and self.ReadyToExercise():
             self.SendCommand("generator: setremote=startexercise")
-            self.DebugOutput("Starting quiet exercise cycle.")
+            self.LogDebug("Starting quiet exercise cycle.")
             self.StopTimer = threading.Timer(
                 float(self.ExerciseDuration * 60.0), self.StopExercise
             )
@@ -299,14 +343,14 @@ class GenExercise(MySupport):
         elif self.ExerciseType.lower() == "transfer" and self.ReadyToExercise():
             if self.ExerciseWarmup == 0:
                 self.SendCommand("generator: setremote=starttransfer")
-                self.DebugOutput("Starting transfer exercise cycle.")
+                self.LogDebug("Starting transfer exercise cycle.")
                 self.StopTimer = threading.Timer(
                     float(self.ExerciseDuration * 60.0), self.StopExercise
                 )
                 self.StopTimer.start()
             else:
                 self.SendCommand("generator: setremote=start")
-                self.DebugOutput("Starting warmup for transfer exercise cycle.")
+                self.LogDebug("Starting warmup for transfer exercise cycle.")
                 # start timer for post warmup transition to starttransfer command
                 self.WarmupTimer = threading.Timer(
                     float(self.ExerciseWarmup * 60.0), self.PostWarmup
@@ -323,16 +367,10 @@ class GenExercise(MySupport):
 
         if self.ExerciseActive:
             self.SendCommand("generator: setremote=stop")
-            self.DebugOutput("Stopping exercise cycle.")
+            self.LogDebug("Stopping exercise cycle.")
             self.ExerciseActive = False
         else:
-            self.DebugOutput("Calling Stop Exercise (not needed)")
-
-    # ---------- GenExercise::DebugOutput-----------------------------
-    def DebugOutput(self, Message):
-
-        if self.Debug:
-            self.LogError(Message)
+            self.LogDebug("Calling Stop Exercise (not needed)")
 
     # ---------- GenExercise::WriteLastExerciseTime-----------------------------
     def WriteLastExerciseTime(self):
@@ -342,7 +380,7 @@ class GenExercise(MySupport):
             if self.ExerciseFrequency.lower() == "biweekly":
                 self.config.WriteValue("last_exercise", NowString)
                 self.config.LastExerciseTime = NowString
-            self.DebugOutput("Last Exercise Cycle: " + NowString)
+            self.LogDebug("Last Exercise Cycle: " + NowString)
         except Exception as e1:
             self.LogErrorLine("Error in WriteLastExerciseTime: " + str(e1))
 
@@ -358,7 +396,7 @@ class GenExercise(MySupport):
                 or TimeNow.minute != self.ExerciseMinute
             ):
                 return False
-
+            ## if we get past this line then the time is correct
             weekDays = (
                 "Monday",
                 "Tuesday",
@@ -371,12 +409,14 @@ class GenExercise(MySupport):
 
             WeekDayString = weekDays[TimeNow.weekday()]
 
-            if not self.ExerciseFrequency.lower() in ["weekly", "biweekly", "monthly"]:
+            if not self.ExerciseFrequency.lower() in ["daily","weekly", "biweekly", "monthly", "post-controller"]:
                 self.LogError(
                     "Invalid Exercise Frequency in TimeForExercise: "
                     + str(self.ExerciseFrequency)
                 )
                 return False
+            if (self.ExerciseFrequency.lower() == "daily"):
+                return True 
             if (
                 self.ExerciseFrequency.lower() == "weekly"
                 and self.ExerciseDayOfWeek.lower() == WeekDayString.lower()
@@ -397,14 +437,39 @@ class GenExercise(MySupport):
             elif (
                 self.ExerciseFrequency.lower() == "monthly"
                 and TimeNow.day == self.ExerciseDayOfMonth
+                and self.ExerciseNthDayOfMonth == 0
             ):
+                return True
+            elif (self.ExerciseFrequency.lower() == "monthly" 
+                  and self.ExerciseNthDayOfMonth <= 5 and self.ExerciseNthDayOfMonth >= 1
+                  and self.IsNthWeekDay(TimeNow, self.ExerciseNthDayOfMonth, weekDays.index(self.ExerciseDayOfWeek.capitalize()))
+                  ):
                 return True
             else:
                 return False
         except Exception as e1:
             self.LogErrorLine("Error in TimeForExercise: " + str(e1))
         return False
+    # ---------- GenExercise::IsNthWeekDay--------------------------------------
+    def IsNthWeekDay(self, current_time, n, weekday):
+        try:
+            import calendar
+            # Note that weekday = 0 for monday, 6 for sunday
+            daysInMonth = calendar.monthrange(current_time.year, current_time.month)[1]
 
+            count = 0
+            for day in range(daysInMonth):
+                today = datetime.date(current_time.year, current_time.month, day+1)
+                today_weekday = today.weekday()
+                if today_weekday == weekday:
+                    count += 1
+                    if n == count:
+                        if current_time.day == (day+1):
+                            return True 
+        except Exception as e1:
+            self.LogErrorLine("Error in IsNthWeekDay: " + str(e1))
+
+        return False
     # ---------- GenExercise::GetGeneratorTime----------------------------------
     def GetGeneratorTime(self):
         try:
@@ -451,6 +516,41 @@ class GenExercise(MySupport):
                 self.LogErrorLine("Error in ExerciseThread: " + str(e1))
                 if self.WaitForExit("ExerciseThread", float(self.PollTime)):
                     return
+    # ---------- GenExercise::ExerciseThread------------------------------------
+    #  Start exercise cycle after an exercise has completed.
+    def PostExerciseThread(self):
+
+        time.sleep(1)
+        
+        if not self.ExerciseFrequency.lower() in ["post-controller"]:
+            self.LogDebug("Error: PostExerciseThread entered without proper initilization. Exiting thread.")
+            return
+        while True:
+            try:
+                # get base status, is it exercise, ignore if we started the cycle
+                if not self.ExerciseActive:
+                    status = self.SendCommand("generator: getbase")
+                    if status.lower() in ["exercising"]:
+                        # yes, set flag, wait for stop
+                        self.LogDebug("Controller Exercise detected, waiting for stop.")
+                        self.ControllerExercise = True
+                    elif self.ReadyToExercise() and self.ControllerExercise == True:
+                        # start our exercise cycle
+                        self.ControllerExercise = False
+                        self.LogDebug("Controller Exercise stopped, start our exercise cycle.")
+                        self.StartExercise()
+                    else:
+                        self.LogDebug("Status: " + str(status))
+                else:
+                    if self.ControllerExercise:
+                        self.ControllerExercise = False
+                        self.LogDebug("Reset controller exercise ")
+                if self.WaitForExit("PostExerciseThread", float(self.PollTime)):
+                    return
+            except Exception as e1:
+                self.LogErrorLine("Error in PostExerciseThread: " + str(e1))
+                if self.WaitForExit("PostExerciseThread", float(self.PollTime)):
+                    return
 
     # ----------GenExercise::SignalClose----------------------------------------
     def SignalClose(self, signum, frame):
@@ -460,7 +560,10 @@ class GenExercise(MySupport):
 
     # ----------GenExercise::Close----------------------------------------------
     def Close(self):
-        self.KillThread("ExerciseThread")
+        if not self.ExerciseFrequency.lower() in ["post-controller"]:
+            self.KillThread("ExerciseThread")
+        else:
+            self.KillThread("PostExerciseThread")
 
         if self.ExerciseActive:
             try:

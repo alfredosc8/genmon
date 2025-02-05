@@ -89,6 +89,35 @@
             "keywords" : ["Status/Engine", "Rotor Poles"]
         },
         {
+            "oid": "0, 0, 13",
+            "return_type": "str",
+            "integer": true,
+            "description": "rotorPoles",
+            "default" : "",
+            "keywords" : ["Status/Engine", "Hall Effect Sensor"]
+        },
+        {
+            "oid": "0, 0, 15",
+            "return_type": "str",
+            "description": "outputCurrentL1",
+            "default" : "",
+            "keywords" : ["Status/Engine", "Current L1"]
+        },
+        {
+            "oid": "0, 0, 16",
+            "return_type": "str",
+            "description": "outputCurrentL2",
+            "default" : "",
+            "keywords" : ["Status/Engine", "Current L2"]
+        },
+        {
+            "oid": "0, 0, 17",
+            "return_type": "str",
+            "description": "batteryChargeCurrent",
+            "default" : "",
+            "keywords" : ["Status/Engine", "Battery Charger Current"]
+        },
+        {
             "oid": "0, 1, 1",
             "return_type": "str",
             "integer": true,
@@ -222,6 +251,30 @@
             "description": "fuelType",
             "default" : " ",
             "keywords" : ["Maintenance", "Fuel Type"]
+        },
+        {
+            "oid": "1, 0, 8, 1",
+            "return_type": "str",
+            "integer": true,
+            "description": "fuelLevelSensor2",
+            "default" : " ",
+            "keywords" : ["Maintenance", "Fuel Level Sensor Tank 2"]
+        },
+        {
+            "oid": "1, 0, 8, 2",
+            "return_type": "str",
+            "integer": true,
+            "description": "fuelLevelSensor3",
+            "default" : " ",
+            "keywords" : ["Maintenance", "Fuel Level Sensor Tank 3"]
+        },
+        {
+            "oid": "1, 0, 8, 3",
+            "return_type": "str",
+            "integer": true,
+            "description": "fuelLevelSensor4",
+            "default" : " ",
+            "keywords" : ["Maintenance", "Fuel Level Sensor Tank 4"]
         },
         {
             "oid": "1, 0, 8",
@@ -503,6 +556,20 @@
             "description": "FirmwareVersion",
             "default" : " ",
             "keywords" : ["Maintenance/Service", "Firmware Version"]
+        },
+        {
+            "oid": "2, 0, 1",
+            "return_type": "str",
+            "description": "OutageStatus",
+            "default" : " ",
+            "keywords" : ["Outage", "Status"]
+        },
+        {
+            "oid": "2, 0, 2",
+            "return_type": "str",
+            "description": "OutageSystemInOutage",
+            "default" : " ",
+            "keywords" : ["Outage", "System In Outage"]
         }
     ]
 }

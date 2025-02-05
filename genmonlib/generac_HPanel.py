@@ -1103,6 +1103,7 @@ class HPanel(GeneratorController):
             config=config,
         )
 
+        self.AltTimeSet = True
         self.LastEngineState = ""
         self.CurrentAlarmState = False
         self.VoltageConfig = None
@@ -1549,31 +1550,44 @@ class HPanel(GeneratorController):
     def GetGeneratorFileData(self):
 
         try:
+            if self.IsStopping:
+                return
             # Read the nameplate dataGet Serial Number
             self.ModBus.ProcessFileReadTransaction(
                 NAMEPLATE_DATA_FILE_RECORD, NAMEPLATE_DATA_LENGTH / 2
             )
+            if self.IsStopping:
+                return
             # Read Misc Engine data
             self.ModBus.ProcessFileReadTransaction(
                 MISC_GEN_FILE_RECORD, MISC_GEN_FILE_RECORD_LENGTH / 2
             )
+            if self.IsStopping:
+                return
             # Read Engine Data
             self.ModBus.ProcessFileReadTransaction(
                 ENGINE_DATA_FILE_RECORD, ENGINE_DATA_FILE_RECORD_LENGTH / 2
             )
+            if self.IsStopping:
+                return
             # Read Govonor Data
             self.ModBus.ProcessFileReadTransaction(
                 GOV_DATA_FILE_RECORD, GOV_DATA_FILE_RECORD_LENGTH / 2
             )
+            if self.IsStopping:
+                return
             # Read Secondary Govonor Data
             self.ModBus.ProcessFileReadTransaction(
                 GOV_DATA_SEC_FILE_RECORD, GOV_DATA_SEC_FILE_RECORD_LENGTH / 2
             )
+            if self.IsStopping:
+                return
             # Read Regulator Data
             self.ModBus.ProcessFileReadTransaction(
                 REGULATOR_FILE_RECORD, REGULATOR_FILE_RECORD_LENGTH / 2
             )
-
+            if self.IsStopping:
+                return
             self.GetGeneratorLogFileData()
         except Exception as e1:
             self.LogErrorLine("Error in GetGeneratorFileData: " + str(e1))
@@ -1599,6 +1613,8 @@ class HPanel(GeneratorController):
             for RegValue in range(
                 EVENT_LOG_START + EVENT_LOG_ENTRIES - 1, EVENT_LOG_START - 1, -1
             ):
+                if self.IsStopping:
+                    return
                 Register = "%04x" % RegValue
                 localTimeoutCount = self.ModBus.ComTimoutError
                 localSyncError = self.ModBus.ComSyncError
@@ -1611,6 +1627,8 @@ class HPanel(GeneratorController):
             for RegValue in range(
                 ALARM_LOG_START + ALARM_LOG_ENTRIES - 1, ALARM_LOG_START - 1, -1
             ):
+                if self.IsStopping:
+                    return
                 Register = "%04x" % RegValue
                 localTimeoutCount = self.ModBus.ComTimoutError
                 localSyncError = self.ModBus.ComSyncError
@@ -1673,8 +1691,14 @@ class HPanel(GeneratorController):
                 except Exception as e1:
                     self.LogErrorLine("Error in MasterEmulation: " + str(e1))
 
+            if self.IsStopping:
+                return
             self.GetGeneratorStrings()
+            if self.IsStopping:
+                return
             self.GetGeneratorFileData()
+            if self.IsStopping:
+                return
             self.CheckForAlarmEvent.set()
         except Exception as e1:
             self.LogErrorLine("Error in MasterEmulation: " + str(e1))
@@ -1829,8 +1853,8 @@ class HPanel(GeneratorController):
             status_included = False
             if not self.InitComplete:
                 return
-            # Check for changes in engine state
-            EngineState = self.GetEngineState()
+            # Check for changes in engine state, switch state or Generator Status
+            EngineState = self.GetOneLineStatus() + " : " + self.GetGeneratorStatus()
             msgbody = ""
 
             self.CheckForOutage()
@@ -1847,6 +1871,7 @@ class HPanel(GeneratorController):
                     MessageType = "warn"
                 msgbody += self.DisplayStatus()
                 status_included = True
+                msgbody += "\nIP Address: " + self.GetNetworkIp()
                 self.MessagePipe.SendMessage(msgsubject, msgbody, msgtype=MessageType)
 
             # Check for Alarms
@@ -1855,12 +1880,14 @@ class HPanel(GeneratorController):
                     msgsubject = "Generator Notice: ALARM Active at " + self.SiteName
                     if not status_included:
                         msgbody += self.DisplayStatus()
+                    msgbody += "\nIP Address: " + self.GetNetworkIp()
                     self.MessagePipe.SendMessage(msgsubject, msgbody, msgtype="warn")
             else:
                 if self.CurrentAlarmState:
                     msgsubject = "Generator Notice: ALARM Clear at " + self.SiteName
                     if not status_included:
                         msgbody += self.DisplayStatus()
+                    msgbody += "\nIP Address: " + self.GetNetworkIp()
                     self.MessagePipe.SendMessage(msgsubject, msgbody, msgtype="warn")
 
             self.CurrentAlarmState = self.SystemInAlarm()
@@ -1930,7 +1957,7 @@ class HPanel(GeneratorController):
         return False
 
     # ------------ HPanel:UpdateRegisterList ------------------------------------
-    def UpdateRegisterList(self, Register, Value, IsString=False, IsFile=False):
+    def UpdateRegisterList(self, Register, Value, IsString=False, IsFile=False, IsCoil = False, IsInput = False):
 
         try:
             if len(Register) != 4:
@@ -1942,7 +1969,7 @@ class HPanel(GeneratorController):
 
             if not IsFile and self.RegisterIsBaseRegister(Register, Value):
                 # TODO validate register length
-                self.Registers[Register] = Value
+                self.Holding[Register] = Value
             elif not IsFile and self.RegisterIsStringRegister(Register):
                 # TODO validate register string length
                 self.Strings[Register] = Value
@@ -2043,6 +2070,19 @@ class HPanel(GeneratorController):
             self.LogErrorLine("Error in GetEngineState (1): " + str(e1))
             return "Unknown"
 
+    # ------------ HPanel:GetGeneratorStatus -----------------------------------
+    def GetGeneratorStatus(self):
+
+        try:
+            GenStatus = self.GetParameterStringValue(
+                        RegisterStringEnum.GENERATOR_STATUS[REGISTER],
+                        RegisterStringEnum.GENERATOR_STATUS[RET_STRING],
+                    )
+            return GenStatus
+        except Exception as e1:
+            self.LogErrorLine("Error in GetGeneratorStatus: " + str(e1))
+            return "Unknown"
+        
     # ------------ HPanel:GetDateTime -------------------------------------------
     def GetDateTime(self):
 
@@ -2191,7 +2231,7 @@ class HPanel(GeneratorController):
 
             if not NoTile:
 
-                StartInfo["buttons"] = {}
+                StartInfo["buttons"] = []
 
                 StartInfo["pages"] = {
                     "status": True,
@@ -3284,11 +3324,11 @@ class HPanel(GeneratorController):
 
             RegList = []
 
-            Regs["Num Regs"] = "%d" % len(self.Registers)
+            Regs["Num Regs"] = "%d" % len(self.Holding)
 
-            Regs["Base Registers"] = RegList
+            Regs["Holding"] = RegList
             # display all the registers
-            temp_regsiters = self.Registers
+            temp_regsiters = self.Holding
             for Register, Value in temp_regsiters.items():
                 RegList.append({Register: Value})
 
@@ -3323,41 +3363,71 @@ class HPanel(GeneratorController):
             # get system time
             d = datetime.datetime.now()
 
+            # GEN_TIME_HR_MIN = ["00e0", 2]  # Time HR:MIN
+            # GEN_TIME_SEC_DYWK = ["00e1", 2]  # Time SEC:DayOfWeek
+            # GEN_TIME_MONTH_DAY = ["00e2", 2]  # Time Month:DayofMonth
+            # GEN_TIME_YR = ["00e3", 2]  # Time YR:UNK
             # We will write four registers at once: GEN_TIME_HR_MIN - GEN_TIME_YR.
-            Data = []
-            Data.append(d.hour)  # GEN_TIME_HR_MIN
-            Data.append(d.minute)
-            self.ModBus.ProcessWriteTransaction(
-                self.Reg.GEN_TIME_HR_MIN[REGISTER], len(Data) / 2, Data
-            )
+            
+            if self.AltTimeSet:
+                Data = []
+                Data.append(d.hour)  # GEN_TIME_HR_MIN
+                Data.append(d.minute)
+                
+                DayOfWeek = d.weekday()  # returns Monday is 0 and Sunday is 6
+                # expects Sunday = 1, Saturday = 7
+                if DayOfWeek == 6:
+                    DayOfWeek = 1
+                else:
+                    DayOfWeek += 2
+                Data.append(d.second)  # GEN_TIME_SEC_DYWK
+                Data.append(DayOfWeek)  # Day of Week is always zero
+                
+                Data.append(d.month)  # GEN_TIME_MONTH_DAY
+                Data.append(d.day)  # low byte is day of month
 
-            DayOfWeek = d.weekday()  # returns Monday is 0 and Sunday is 6
-            # expects Sunday = 1, Saturday = 7
-            if DayOfWeek == 6:
-                DayOfWeek = 1
+                # Note: Day of week should always be zero when setting time
+                Data.append(d.year - 2000)  # GEN_TIME_YR
+                Data.append(0)  #
+                self.ModBus.ProcessWriteTransaction(
+                    self.Reg.GEN_TIME_HR_MIN[REGISTER], len(Data) / 2, Data
+                )
+
             else:
-                DayOfWeek += 2
-            Data = []
-            Data.append(d.second)  # GEN_TIME_SEC_DYWK
-            Data.append(DayOfWeek)  # Day of Week is always zero
-            self.ModBus.ProcessWriteTransaction(
-                self.Reg.GEN_TIME_SEC_DYWK[REGISTER], len(Data) / 2, Data
-            )
+                Data = []
+                Data.append(d.hour)  # GEN_TIME_HR_MIN
+                Data.append(d.minute)
+                self.ModBus.ProcessWriteTransaction(
+                    self.Reg.GEN_TIME_HR_MIN[REGISTER], len(Data) / 2, Data
+                )
 
-            Data = []
-            Data.append(d.month)  # GEN_TIME_MONTH_DAY
-            Data.append(d.day)  # low byte is day of month
-            self.ModBus.ProcessWriteTransaction(
-                self.Reg.GEN_TIME_MONTH_DAY[REGISTER], len(Data) / 2, Data
-            )
+                DayOfWeek = d.weekday()  # returns Monday is 0 and Sunday is 6
+                # expects Sunday = 1, Saturday = 7
+                if DayOfWeek == 6:
+                    DayOfWeek = 1
+                else:
+                    DayOfWeek += 2
+                Data = []
+                Data.append(d.second)  # GEN_TIME_SEC_DYWK
+                Data.append(DayOfWeek)  # Day of Week is always zero
+                self.ModBus.ProcessWriteTransaction(
+                    self.Reg.GEN_TIME_SEC_DYWK[REGISTER], len(Data) / 2, Data
+                )
 
-            Data = []
-            # Note: Day of week should always be zero when setting time
-            Data.append(d.year - 2000)  # GEN_TIME_YR
-            Data.append(0)  #
-            self.ModBus.ProcessWriteTransaction(
-                self.Reg.GEN_TIME_YR[REGISTER], len(Data) / 2, Data
-            )
+                Data = []
+                Data.append(d.month)  # GEN_TIME_MONTH_DAY
+                Data.append(d.day)  # low byte is day of month
+                self.ModBus.ProcessWriteTransaction(
+                    self.Reg.GEN_TIME_MONTH_DAY[REGISTER], len(Data) / 2, Data
+                )
+
+                Data = []
+                # Note: Day of week should always be zero when setting time
+                Data.append(d.year - 2000)  # GEN_TIME_YR
+                Data.append(0)  #
+                self.ModBus.ProcessWriteTransaction(
+                    self.Reg.GEN_TIME_YR[REGISTER], len(Data) / 2, Data
+                )
 
         except Exception as e1:
             self.LogErrorLine("Error in SetGeneratorTimeDate: " + str(e1))
@@ -3630,6 +3700,7 @@ class HPanel(GeneratorController):
             #   "powerfactor" : float value (default is 1.0) used if converting from current to power or power to current
             #   ctdata[] : list of amps for each leg
             #   ctpower[] :  list of power in kW for each leg
+            #   voltagelegs[] : list of voltage legs
             #   voltage : optional, float value of total RMS voltage (all legs combined)
             #   phase : optional, int (1 or 3)
             # }
@@ -3723,6 +3794,7 @@ class HPanel(GeneratorController):
     # ------------ HPanel:GetOneLineStatus --------------------------------------
     # returns a one line status for example : switch state and engine state
     def GetOneLineStatus(self):
+
         return self.GetSwitchState() + " : " + self.GetEngineState()
 
     # ----------  GeneratorController::FuelSensorSupported------------------------

@@ -17,6 +17,9 @@ import re
 import sys
 import threading
 import time
+import copy
+import struct
+import math
 
 from genmonlib.controller import GeneratorController
 from genmonlib.modbus_file import ModbusFile
@@ -145,7 +148,7 @@ class CustomController(GeneratorController):
                 "voltageconfiguration", default="277/480"
             )
             self.NominalBatteryVolts = int(
-                self.config.ReadValue("nominalbattery", return_type=int, default=24)
+                self.config.ReadValue("nominalbattery", return_type=int, default=12)
             )
             self.FuelUnits = self.config.ReadValue("fuel_units", default="gal")
             self.FuelHalfRate = self.config.ReadValue(
@@ -169,12 +172,14 @@ class CustomController(GeneratorController):
                 self.SerialBaudRate = self.config.ReadValue(
                     "serial_baud_rate", return_type=int, default=9600
                 )
-            if self.config.HasOption("serial_parity"):
-                self.SerialParity = self.config.ReadValue(
-                    "serial_parity", return_type=int, default=0
-                )
-                if self.SerialParity == 0 or self.SerialParity > 2:
-                    self.SerialParity = None
+            # None, Even or Odd
+            self.SerialParity = self.config.ReadValue("serial_parity",  default=None)
+            if self.SerialParity == None or self.SerialParity.lower() == "none" or self.SerialParity == "0":
+                self.SerialParity = None
+            elif self.SerialParity.lower() == "odd" or self.SerialParity == "1":
+                self.SerialParity = 1
+            else:
+                self.SerialParity = 2
             if self.config.HasOption("serial_one_point_five_stop_bits"):
                 self.SerialOnePointFiveStopBits = self.config.ReadValue(
                     "serial_one_point_five_stop_bits", return_type=bool, default=False
@@ -199,6 +204,7 @@ class CustomController(GeneratorController):
                 return False
 
         except Exception as e1:
+            self.LogErrorLine("Error in GetConfig: " + str(e1))
             self.FatalError(
                 "Missing config file or config file entries (CustomController): "
                 + str(e1)
@@ -230,15 +236,17 @@ class CustomController(GeneratorController):
     # -------------CustomController:GetSingleEntry-------------------------------
     # get a single value from JSON config or a dynamic value from modbus
     # Return either a modbus value or a single numeric value from JSON
-    def GetSingleEntry(self, entry_name):
+    def GetSingleEntry(self, entry_name, JSONNum=False):
         try:
             if not entry_name in self.controllerimport:
                 return False, None
             ImportedEntry = self.controllerimport[entry_name]
             if isinstance(ImportedEntry, dict):
                 ImportedTitle, ImportedValue = self.GetDisplayEntry(
-                    ImportedEntry, JSONNum=False, no_units=True
+                    ImportedEntry, JSONNum=JSONNum, no_units=True
                 )
+                if ImportedValue == None:
+                    return False, None
             elif self.IsString(ImportedEntry):
                 return True, ImportedEntry
             else:
@@ -254,6 +262,9 @@ class CustomController(GeneratorController):
         try:
             if self.ControllerDetected:
                 return
+            if (self.Model != None and self.Model.lower() != str(self.controllerimport["controller_name"]).lower()) or self.Model == None:
+                self.config.WriteValue("model", str(self.controllerimport["controller_name"]))
+
             self.Model = str(self.controllerimport["controller_name"])
 
             ReturnValue = False
@@ -263,35 +274,88 @@ class CustomController(GeneratorController):
             if not ReturnValue:
                 return False
             if isinstance(TempValue, int):
+                if TempValue == 0:
+                    TempValue = 480
                 self.NominalLineVolts = TempValue 
+            elif self.StringIsInt(TempValue):
+                self.NominalLineVolts = int(TempValue)
+            elif type(TempValue) == str and TempValue.lower() == "unknown":
+                self.NominalLineVolts = self.NominalLineVolts
+            else:
+                self.LogDebug("Nominal Line Volts: " + str(self.NominalLineVolts))
 
             ReturnValue, TempValue = self.GetSingleEntry("nominal_battery_voltage")
             if not ReturnValue:
                 return False
             if isinstance(TempValue, int):
+                if TempValue == 0:
+                    TempValue = 24
                 self.NominalBatteryVolts = TempValue 
+            elif self.StringIsInt(TempValue):
+                self.NominalBatteryVolts = int(TempValue)
+            elif type(TempValue) == str and TempValue.lower() == "unknown":
+                self.NominalBatteryVolts = self.NominalBatteryVolts     # use etc config file value
+            else:
+                self.LogDebug("Nominal Battery Volts: " + str(self.NominalBatteryVolts))
 
             ReturnValue, TempValue = self.GetSingleEntry("rated_nominal_freq")
             if not ReturnValue:
                 return False
             if isinstance(TempValue, int):
+                if TempValue == 0:
+                    TempValue = 60
                 self.NominalFreq = TempValue 
+            elif self.StringIsInt(TempValue):
+                self.NominalFreq = int(TempValue)
+            elif type(TempValue) == str and TempValue.lower() == "unknown":
+                if type(self.NominalFreq) == str and self.NominalFreq.lower() == "unknown":
+                    self.NominalFreq = 60
+                else:
+                    self.LogDebug("Nominal Frequency: " + str(self.NominalFreq))
+            else:
+                self.LogDebug("Nominal Frequency: " + str(self.NominalFreq))
 
             ReturnValue, TempValue = self.GetSingleEntry("rated_nominal_rpm")
             if not ReturnValue:
                 return False
+
             if isinstance(TempValue, int):
+                if TempValue == 0:
+                    TempValue = 1800
                 self.NominalRPM = TempValue 
+            elif self.StringIsInt(TempValue):
+                self.NominalRPM = int(TempValue)
+            elif type(TempValue) == str and TempValue.lower() == "unknown":
+                if type(self.NominalRPM) == str and self.NominalRPM.lower() == "unknown":
+                    self.NominalRPM = 3600      # default for genmon
+                else:
+                    self.LogDebug("Nominal RPM: " + str(self.NominalRPM))
+            else:
+                self.LogDebug("Nominal RPM: " + str(self.NominalRPM))
 
             ReturnValue, TempValue = self.GetSingleEntry("rated_max_output_power_kw")
             if not ReturnValue:
                 return False
             if isinstance(TempValue, int):
-                self.NominalKW = TempValue 
+                if TempValue == 0:
+                    TempValue = 100
+                self.NominalKW = str(TempValue)
+            elif self.StringIsFloat(TempValue) or self.StringIsInt(TempValue):
+                self.NominalKW = str(TempValue)
+            else:
+                self.LogDebug("Nominal kW: " + str(self.NominalKW))
 
-            ReturnValue, self.Phase = self.GetSingleEntry("generator_phase")
+            ReturnValue, TempValue = self.GetSingleEntry("generator_phase")
             if not ReturnValue:
                 return False
+            if isinstance(TempValue, int):
+                self.Phase = TempValue
+                if self.Phase != 1:
+                    self.Phase = 3
+            elif self.StringIsInt(TempValue):
+                self.Phase = int(TempValue)
+            else:
+                self.LogDebug("Phase: " + str(self.Phase))
 
             if "identity" in self.controllerimport:
                 Controller_Identity = self.GetExtendedDisplayString(self.controllerimport, "identity")
@@ -325,8 +389,9 @@ class CustomController(GeneratorController):
             if not "engine_state" in self.controllerimport:
                 self.LogError("Error: Controller Import does not contain engine_state")
                 return False
-            if not "base_registers" in self.controllerimport:
-                self.LogError("Error: Controller Import does not contain base_registers")
+            # base registers are holding registers (Modbus Function 3), input registers  are Modbus Function 4
+            if not "holding_registers" in self.controllerimport and not "input_registers" in self.controllerimport:
+                self.LogError("Error: Controller Import does not contain holding_registers and input_registers")
                 return False
             if not "status" in self.controllerimport:
                 self.LogError("Error: Controller Import does not contain status")
@@ -357,20 +422,51 @@ class CustomController(GeneratorController):
                 self.LogError("Error: Controller Import does not contain nominal_battery_voltage")
                 return False
 
-            for Register, RegisterData in self.controllerimport["base_registers"].items():
-                if isinstance(RegisterData, dict):
-                    Length = RegisterData["length"]
-                else:
-                    Length = RegisterData
-                if Length % 2 != 0:
-                    self.LogError(
-                        "Error: Controller Import: modbus register lenghts must be divisible by 2: "
-                        + str(Register)
-                        + ":"
-                        + str(Length)
-                    )
-                    return False
+            if "holding_registers" in self.controllerimport:
+                for Register, RegisterData in self.controllerimport["holding_registers"].items():
+                    if isinstance(RegisterData, dict):
+                        Length = RegisterData["length"]
+                    else:
+                        Length = RegisterData
+                    if Length % 2 != 0:
+                        self.LogError(
+                            "Error: Controller Import: modbus register lenghts must be divisible by 2 (holding_registers): "
+                            + str(Register)
+                            + ":"
+                            + str(Length)
+                        )
+                        return False
+            if "input_registers" in self.controllerimport:
+                for Register, RegisterData in self.controllerimport["input_registers"].items():
+                    if isinstance(RegisterData, dict):
+                        Length = RegisterData["length"]
+                    else:
+                        Length = RegisterData
+                    if Length % 2 != 0:
+                        self.LogError(
+                            "Error: Controller Import: modbus register lenghts must be divisible by 2 (input_registers): "
+                            + str(Register)
+                            + ":"
+                            + str(Length)
+                        )
+                        return False
 
+            if "coil_registers" in self.controllerimport:
+                for Register, RegisterData in self.controllerimport["coil_registers"].items():
+                    if isinstance(RegisterData, dict):
+                        Length = RegisterData["length"]
+                    else:
+                        Length = RegisterData
+                    if Length != 1:
+                        self.LogError(
+                            "Error: Controller Import: modbus register lenghts must be 1 for coil registers"
+                            + str(Register)
+                            + ":"
+                            + str(Length)
+                        )
+                        return False
+
+            self.LogDebug("Configuration Validated!")
             self.ConfigValidated = True
 
             return True
@@ -401,34 +497,63 @@ class CustomController(GeneratorController):
             sensor_list = self.controllerimport["gauges"]
 
             for sensor in sensor_list:
-
+                
                 if "title" not in sensor:
                     self.LogError("Error in SetupTiles: no " "title" " in sensor entry")
                     continue
 
                 if "sensor" not in sensor:
                     self.LogError(
-                        "Error in SetupTiles: sensor (" + sensor["title"] + ") has no "
-                        "sensor"
-                        " entry"
+                        "Error in SetupTiles: sensor (" + sensor["title"] + ") has no ""sensor"" entry"
                     )
                     continue
                 if "units" not in sensor:
                     self.LogError(
-                        "Error in SetupTiles: sensor (" + sensor["title"] + ") has no "
-                        "units"
-                        " entry"
+                        "Error in SetupTiles: sensor (" + sensor["title"] + ") has no ""units"" entry"
                     )
                     continue
+                units = sensor["units"]
+
                 if "nominal" not in sensor:
                     self.LogError(
-                        "Error in SetupTiles: sensor (" + sensor["title"] + ") has no "
-                        "nominal"
-                        " entry"
+                        "Error in SetupTiles: sensor (" + sensor["title"] + ") has no ""nominal"" entry"
                     )
                     continue
+                
+                # add inclulde object if needed
+                if "include" in sensor.keys() and "include" in self.controllerimport.keys():
+                    includeNames = sensor["include"]
+                    includeList = includeNames.split(",")
+                    for includeName in includeList:
+                        if includeName in self.controllerimport["include"].keys():
+                            includeValue = self.controllerimport["include"][includeName]
+                            if isinstance(includeValue, dict):
+                                sensor = self.MergeDicts(sensor, includeValue)
+                            else:
+                                self.LogError("Error in SetupTiles: include value is not an object: " + str(includeValue))
+                                continue
+                        else:
+                            self.LogError("Error in SetupTiles: entry has include but object name is not in scope of base include object: " + str(sensor))
+                            continue
+                
+                if "reg" not in sensor:
+                    self.LogError("Error in SetupTiles: no " "reg" " in sensor entry")
+                    continue
 
-                if "maximum" in sensor:
+                # check for "disable" object
+                if "disable" in sensor.keys():
+                # conditionally disable the entry
+                    if "reg_type" in sensor.keys():
+                        reg_type = sensor["reg_type"]
+                    else:
+                        reg_type = None     # holding register
+
+                    title, value = self.GetDisplayEntry(sensor["disable"], inheritreg = sensor["reg"], inheritregtype = reg_type)
+                    if value:
+                        #self.LogDebug("Ignoring gauge " + sensor["title"])
+                        continue
+
+                if "maximum" in sensor.keys():
                     maximum = sensor["maximum"]
                 else:
                     maximum = None
@@ -446,18 +571,28 @@ class CustomController(GeneratorController):
                         nominal = int(self.NominalFreq)
                     elif sensor["sensor"].lower() == "batteryvolts":
                         nominal = self.NominalBatteryVolts
+                    elif sensor["sensor"].lower() == "rpm":
+                        nominal = int(self.NominalRPM)
                     elif sensor["sensor"].lower() == "current":
                         nominal = (float(self.NominalKW) * 1000) / self.NominalLineVolts
                     else:
                         nominal = None
                         self.LogError("Nominal is unknown for type " + sensor["sensor"])
                 else:
-                    nominal = sensor["nominal"]
+                    if sensor["sensor"].lower() == "temperature":
+                        if "nominal" in sensor.keys():
+                            nominal = self.ProcessTemperatureModifier(sensor, sensor["nominal"], units = False)
+                        if "maximum" in sensor.keys():
+                            maximum = self.ProcessTemperatureModifier(sensor, sensor["maximum"], units = False)
+                        if "units" in sensor.keys():
+                            units = self.ProcessTemperatureModifier(sensor, sensor["units"], units = True)
+                    else:
+                        nominal = sensor["nominal"]
                 Tile = MyTile(
                     self.log,
                     title=sensor["title"],
                     type=sensor["sensor"],
-                    units=sensor["units"],
+                    units=units,
                     nominal=nominal,
                     maximum=maximum,
                     values=values,
@@ -484,6 +619,7 @@ class CustomController(GeneratorController):
         ):  #
             return
         self.ModBus.Flush()
+
     # -------------CustomController:RegisterIsLog-------------------------------- 
     def RegisterIsLog(self, Register):
         try:
@@ -516,6 +652,10 @@ class CustomController(GeneratorController):
                     self.LogDebug("Invalid register data in log register description")
                     return
                 try:
+                    IsInput = False
+                    if "reg_type" in RegisterData.keys():
+                        if RegisterData["reg_type"] == "input":
+                            IsInput = True
                     Length = RegisterData["length"]
                     Step = RegisterData["step"]
                     Iteration = RegisterData["iteration"]
@@ -526,7 +666,7 @@ class CustomController(GeneratorController):
                             return
                         localTimeoutCount = self.ModBus.ComTimoutError
                         localSyncError = self.ModBus.ComSyncError
-                        self.ModBus.ProcessTransaction(Register, Length / 2)
+                        self.ModBus.ProcessTransaction(Register, Length / 2, IsInput = IsInput)
                         if (
                             localSyncError != self.ModBus.ComSyncError
                             or localTimeoutCount != self.ModBus.ComTimoutError
@@ -549,25 +689,66 @@ class CustomController(GeneratorController):
                 self.ValidateConfig()
                 if not self.ConfigValidated:
                     return
-            
-            for Register, RegisterData in self.controllerimport["base_registers"].items():
-                if isinstance(RegisterData, dict):
-                    Length = RegisterData["length"]
-                else:
-                    Length = RegisterData
-                try:
-                    if self.IsStopping:
-                        return
-                    localTimeoutCount = self.ModBus.ComTimoutError
-                    localSyncError = self.ModBus.ComSyncError
-                    self.ModBus.ProcessTransaction(Register, Length / 2)
-                    if (
-                        localSyncError != self.ModBus.ComSyncError
-                        or localTimeoutCount != self.ModBus.ComTimoutError
-                    ) and self.ModBus.RxPacketCount:
-                        self.WaitAndPergeforTimeout()
-                except Exception as e1:
-                    self.LogErrorLine("Error in MasterEmulation: " + str(e1))
+            if "holding_registers" in self.controllerimport.keys():
+                for Register, RegisterData in self.controllerimport["holding_registers"].items():
+                    if isinstance(RegisterData, dict):
+                        Length = RegisterData["length"]
+                    else:
+                        Length = RegisterData
+                    try:
+                        if self.IsStopping:
+                            return
+                        localTimeoutCount = self.ModBus.ComTimoutError
+                        localSyncError = self.ModBus.ComSyncError
+                        self.ModBus.ProcessTransaction(Register, Length / 2)
+                        if (
+                            localSyncError != self.ModBus.ComSyncError
+                            or localTimeoutCount != self.ModBus.ComTimoutError
+                        ) and self.ModBus.RxPacketCount:
+                            self.WaitAndPergeforTimeout()
+                    except Exception as e1:
+                        self.LogErrorLine("Error in MasterEmulation (holding): " + str(e1))
+
+            if "input_registers" in self.controllerimport.keys():
+                for Register, RegisterData in self.controllerimport["input_registers"].items():
+                    if isinstance(RegisterData, dict):
+                        Length = RegisterData["length"]
+                    else:
+                        Length = RegisterData
+                    try:
+                        if self.IsStopping:
+                            return
+                        localTimeoutCount = self.ModBus.ComTimoutError
+                        localSyncError = self.ModBus.ComSyncError
+                        self.ModBus.ProcessTransaction(Register, Length / 2, IsInput = True)
+                        if (
+                            localSyncError != self.ModBus.ComSyncError
+                            or localTimeoutCount != self.ModBus.ComTimoutError
+                        ) and self.ModBus.RxPacketCount:
+                            self.WaitAndPergeforTimeout()
+                    except Exception as e1:
+                        self.LogErrorLine("Error in MasterEmulation (input): " + str(e1))
+
+            if "coil_registers" in self.controllerimport.keys():
+                for Register, RegisterData in self.controllerimport["coil_registers"].items():
+                    if isinstance(RegisterData, dict):
+                        Length = RegisterData["length"]
+                    else:
+                        Length = RegisterData
+                    try:
+                        if self.IsStopping:
+                            return
+                        localTimeoutCount = self.ModBus.ComTimoutError
+                        localSyncError = self.ModBus.ComSyncError
+                        # force coil to have a length of 1
+                        self.ModBus.ProcessTransaction(Register, 1, IsCoil = True)
+                        if (
+                            localSyncError != self.ModBus.ComSyncError
+                            or localTimeoutCount != self.ModBus.ComTimoutError
+                        ) and self.ModBus.RxPacketCount:
+                            self.WaitAndPergeforTimeout()
+                    except Exception as e1:
+                        self.LogErrorLine("Error in MasterEmulation (coil): " + str(e1))
 
             if self.ControllerDetected == False:
                 self.IdentifyController()
@@ -645,6 +826,7 @@ class CustomController(GeneratorController):
                     MessageType = "warn"
                 msgbody += self.DisplayStatus()
                 status_included = True
+                msgbody += "\nIP Address: " + self.GetNetworkIp()
                 self.MessagePipe.SendMessage(msgsubject, msgbody, msgtype=MessageType)
 
             # Check for Alarms
@@ -653,12 +835,14 @@ class CustomController(GeneratorController):
                     msgsubject = "Generator Notice: ALARM Active at " + self.SiteName
                     if not status_included:
                         msgbody += self.DisplayStatus()
+                    msgbody += "\nIP Address: " + self.GetNetworkIp()
                     self.MessagePipe.SendMessage(msgsubject, msgbody, msgtype="warn")
             else:
                 if self.CurrentAlarmState:
                     msgsubject = "Generator Notice: ALARM Clear at " + self.SiteName
                     if not status_included:
                         msgbody += self.DisplayStatus()
+                    msgbody += "\nIP Address: " + self.GetNetworkIp()
                     self.MessagePipe.SendMessage(msgsubject, msgbody, msgtype="warn")
 
             self.CurrentAlarmState = self.SystemInAlarm()
@@ -669,7 +853,7 @@ class CustomController(GeneratorController):
         return
 
     # ------------ CustomController:UpdateRegisterList --------------------------
-    def UpdateRegisterList(self, Register, Value, IsString=False, IsFile=False):
+    def UpdateRegisterList(self, Register, Value, IsString=False, IsFile=False, IsCoil = False, IsInput = False):
 
         try:
             if len(Register) != 4:
@@ -679,61 +863,108 @@ class CustomController(GeneratorController):
                 )
                 return False
 
-            if not IsFile:
-                #  validate data length
-                datalength = int(len(Value) / 2)
-                if Register in self.controllerimport["base_registers"]:
-                    RegisterData = self.controllerimport["base_registers"][Register]
-                
-                    if isinstance(RegisterData, dict):
-                        Length = RegisterData["length"]
-                    else:
-                        Length = RegisterData
-                    if Length != datalength:
-                        self.LogError(
-                            "Invalid length detected in received modbus regisger "
-                            + str(Register)
-                            + " : "
-                            + str(datalength)
-                            + ": "
-                            + str(Length)
-                            + ": ["
-                            + self.HexStringToString(Value) +"]"
-                        )
-                        return False
-                    else:
-                        self.Registers[Register] = Value
-                else:
-                    # TODO Validate log registers
-                    ReturnStatus, LogRegLength, Name = self.RegisterIsLog(Register)
-                    if ReturnStatus:
-                        self.Registers[Register] = Value
-                    else:
-                        self.LogError("Failure validating log register: " + Register)
-                        return False
-            else:
+            if IsFile:
                 # todo validate file data length
                 self.FileData[Register] = Value
+            elif IsCoil:
+                self.Coils[Register] = Value
+            elif IsInput:
+                if self.ValidateRegister("input_registers", Register, Value):
+                    self.Inputs[Register] = Value
+                else:
+                    ReturnStatus, LogRegLength, Name = self.RegisterIsLog(Register)
+                    if ReturnStatus:
+                        self.Inputs[Register] = Value
+                    else:
+                        self.LogError("Failure validating log input register: " + Register)
+                        return False
+            else:   # base register (holding register)
+                #  validate data length
+                if self.ValidateRegister("holding_registers", Register, Value):
+                    self.Holding[Register] = Value
+                else:
+                    ReturnStatus, LogRegLength, Name = self.RegisterIsLog(Register)
+                    if ReturnStatus:
+                        self.Holding[Register] = Value
+                    else:
+                        self.LogError("Failure validating log holding register: " + Register)
+                        return False
+            
             return True
         except Exception as e1:
             self.LogErrorLine("Error in UpdateRegisterList: " + str(e1))
             return False
+        
+    # ----------  CustomController::ValidateRegister----------------------------
+    def ValidateRegister(self, type, Register, Value):
+
+        try:
+            datalength = int(len(Value) / 2)
+            if not type in self.controllerimport.keys():
+                self.LogError("Error in ValidateRegister: register " + str(Register) + ", type " + str(type) + " not in import data.")
+                return False 
+            
+            if Register in self.controllerimport[type]:
+                RegisterData = self.controllerimport[type][Register]
+            
+                if isinstance(RegisterData, dict):
+                    Length = RegisterData["length"]
+                else:
+                    Length = RegisterData
+                if Length != datalength:
+                    self.LogError("Invalid length detected in received modbus register " + str(Register) + 
+                                " : " + str(datalength) + ": " + str(Length) + ": [" + self.HexStringToString(Value) +"]")
+                    return False
+                return True
+            else:
+                #self.LogDebug("Error in ValidateRegister: register " + str(Register) + " not in " + str(type))
+                return False
+        except Exception as e1:
+            self.LogErrorLine("Error in ValidateRegister: " + str(e1))
+        return False
 
     # ----------  CustomController::GetRegisterLabels---------------------------
     def GetRegisterLabels(self):
         # return JSON of dict with registers and text descriptions
         try:
             ReturnDict = {}
-            for Register in self.Registers.keys():
-                if Register in self.controllerimport["base_registers"].keys():
-                    RegData = self.controllerimport["base_registers"][Register]
-                    if isinstance(RegData, dict):
-                        ReturnDict[Register] = RegData["text"]
-                else:
-                    Success, Length, Name = self.RegisterIsLog(Register)
-                    if Success:
-                        ReturnDict[Register] = Name
-
+            # todo: this presently does not support displaying multiple types of registers
+            # this should be fixed
+            if "holding_registers" in self.controllerimport.keys():
+                HoldingRegLabels = {}
+                for Register in self.Holding.keys():
+                    if Register in self.controllerimport["holding_registers"].keys():
+                        RegData = self.controllerimport["holding_registers"][Register]
+                        if isinstance(RegData, dict):
+                            HoldingRegLabels[Register] = RegData["text"]
+                    else:
+                        Success, Length, Name = self.RegisterIsLog(Register)
+                        if Success:
+                            HoldingRegLabels[Register] = Name
+                if len(HoldingRegLabels.keys()) > 0:
+                    ReturnDict["Holding"] = HoldingRegLabels
+            if "input_registers" in self.controllerimport.keys():
+                InputRegLabels = {}
+                for Register in self.Inputs.keys():
+                    if Register in self.controllerimport["input_registers"].keys():
+                        RegData = self.controllerimport["input_registers"][Register]
+                        if isinstance(RegData, dict):
+                            InputRegLabels[Register] = RegData["text"]
+                    else:
+                        Success, Length, Name = self.RegisterIsLog(Register)
+                        if Success:
+                            InputRegLabels[Register] = Name
+                if len(InputRegLabels.keys()) > 0:
+                    ReturnDict["Inputs"] = InputRegLabels
+            if "coil_registers" in self.controllerimport.keys():
+                CoilRegLabels = {}
+                for Register in self.Coils.keys():
+                    if Register in self.controllerimport["coil_registers"].keys():
+                        RegData = self.controllerimport["coil_registers"][Register]
+                        if isinstance(RegData, dict):
+                            CoilRegLabels[Register] = RegData["text"]
+                if len(CoilRegLabels.keys()) > 0:
+                    ReturnDict["Coils"] = CoilRegLabels
             return json.dumps(ReturnDict)
         except Exception as e1:
             self.LogErrorLine("Error in GetRegisterLabels: " + str(e1))
@@ -831,7 +1062,8 @@ class CustomController(GeneratorController):
             StartInfo["FuelCalculation"] = self.FuelTankCalculationSupported()
             StartInfo["FuelSensor"] = self.FuelSensorSupported()
             StartInfo["FuelConsumption"] = self.FuelConsumptionSupported()
-            StartInfo["Controller"] = self.GetController()
+            StartInfo["Controller"] = self.GetController(Actual=False)
+            StartInfo["Actual"] = self.GetController(Actual=True)
             StartInfo["UtilityVoltage"] = False
             StartInfo["RemoteCommands"] = False  # Remote Start/ Stop/ StartTransfer
             StartInfo["ResetAlarms"] = False
@@ -840,7 +1072,8 @@ class CustomController(GeneratorController):
             StartInfo["RemoteButtons"] = False  # Remote controll of Off/Auto/Manual
             StartInfo["ExerciseControls"] = False  # self.SmartSwitch
             StartInfo["WriteQuietMode"] = False
-            StartInfo["SetGenTime"] = False
+            StartInfo["SetGenTime"] = ("settime" in self.controllerimport.keys())
+        
             if self.Platform != None:
                 StartInfo["Linux"] = self.Platform.IsOSLinux()
                 StartInfo["RaspberryPi"] = self.Platform.IsPlatformRaspberryPi()
@@ -925,29 +1158,12 @@ class CustomController(GeneratorController):
                     return self.printToString(self.ProcessDispatch(Logs, ""))
             
             for logitems in self.controllerimport["logs"]:
-                if "reg" in logitems.keys():
-                    Register = logitems["reg"]
-                    RegisterInt = int(Register,16)
-                    if not "iteration" in logitems.keys():
-                        self.LogError("Error in DisplayLogs: reg present but not iteration")
-                        break
-                    if not "step" in logitems.keys():
-                        self.LogError("Error in DisplayLogs: reg present but not step")
-                        break
-                    iteration = logitems["iteration"]
-                    LogList = []
-                    while iteration > 0:
-                        Register = "%04x" % RegisterInt
-                        title, LogResults = self.GetDisplayEntry(logitems["object"], inheritreg=Register)
-                        if LogResults != None and len(LogResults):
-                            LogList.append(LogResults)
-                        RegisterInt += logitems["step"]
-                        iteration -= 1
-                    LogDict[logitems["title"]] = LogList
-                    
+                title, value = self.GetDisplayEntry(logitems)
+                if value != None:
+                    LogDict[title] = value
                 else:
-                    self.LogDebug("Error in DisplayLogs: non inherit register methods not support at this time")
-                
+                    break
+
         except Exception as e1:
             self.LogErrorLine("Error in DisplayLogs: " + str(e1))
         if not DictOut:
@@ -983,12 +1199,13 @@ class CustomController(GeneratorController):
             Maintenance["Maintenance"].append({"Nominal RPM": self.NominalRPM})
             Maintenance["Maintenance"].append({"Rated kW": self.NominalKW})
             Maintenance["Maintenance"].append({"Nominal Frequency": self.NominalFreq})
+            Maintenance["Maintenance"].append({"Phase": self.Phase})
             Maintenance["Maintenance"].append({"Fuel Type": self.FuelType})
 
             Maintenance = self.DisplayMaintenanceCommon(Maintenance, JSONNum=JSONNum)
 
             Maintenance["Maintenance"].extend(
-                self.GetDisplayList(self.controllerimport, "maintenance")
+                self.GetDisplayList(self.controllerimport, "maintenance", JSONNum=JSONNum)
             )
 
         except Exception as e1:
@@ -1028,16 +1245,16 @@ class CustomController(GeneratorController):
                 Status["Status"].append({"Generator Status": gen_status})
 
             Status["Status"].extend(
-                self.GetDisplayList(self.controllerimport, "status")
+                self.GetDisplayList(self.controllerimport, "status", JSONNum=JSONNum)
             )
 
             if self.SystemInAlarm():
                 Status["Status"].append({"Alarm State": "System In Alarm"})
+                #activealarms = self.GetDisplayList(self.controllerimport, "alarm_conditions")
+                #Status["Status"].append(activealarms[0]
                 Status["Status"].append(
                     {
-                        "Active Alarms": self.GetExtendedDisplayString(
-                            self.controllerimport, "alarm_conditions"
-                        )
+                        "Active Alarms": self.GetExtendedDisplayString(self.controllerimport, "alarm_conditions", ReturnList=True)
                     }
                 )
 
@@ -1060,6 +1277,76 @@ class CustomController(GeneratorController):
 
         return Status
 
+    # ----------  GeneratorController::SetGeneratorTimeDate----------------------
+    # set generator time to system time
+    def SetGeneratorTimeDate(self):
+
+        try:
+            if not "settime" in self.controllerimport.keys():
+                return "Not Supported"
+            
+            settime = self.controllerimport["settime"]
+            if not "command_sequence" in settime:
+                self.LogError("Erroir in SetGeneratorTimeDate: settime does not have a command_sequence element: " + str(settime))
+                return "Not Supported"
+            
+            if not isinstance(settime["command_sequence"], list):
+                self.LogError("Error in SetGeneratorTimeDate: command_sequende is not a list: "+ str(settime))
+                return "Not Supported"
+
+            # get system time
+            d = datetime.datetime.now()
+
+            # attempt to make the seconds zero when we set the generator time so it will
+            # be very close to the system time
+            # Testing has show that this is not really achieving the seconds synced up, but
+            # it does make the time offset consistant
+            while d.second != 0:
+                time.sleep(60 - d.second)  # sleep until seconds are zero
+                d = datetime.datetime.now()
+
+            CommandError = False
+            # make a copy of the command sequence so we can add "value" members to it
+            settime_copy = copy.deepcopy(settime)
+            for command in settime_copy["command_sequence"]:
+                hour = minute = day = month = year = 0
+                length = 2
+                if "length" in command.keys():
+                    if(int(command["length"]) % 2 != 0):
+                        self.LogDebug("Error in SetGeneratorTimeDate: Length is not a multiple of 2: " + str(settime))
+                        length = 2
+                    else:
+                        length = int(command["length"])
+                if not "reg" in command.keys() or not isinstance(command["reg"], str):
+                    self.LogError("Error in SetGeneratorTimeDate: invalid command string defined validateing reg: "+ str(settime))
+                    CommandError = True
+                    break
+                if "year" in command.keys() and isinstance(command["year"], str):
+                    year = self.ProcessExecModifier(command, d.year, altname = "year")
+                if "month" in command.keys() and isinstance(command["month"], str):
+                    month = self.ProcessExecModifier(command, d.month, altname = "month")
+                if "day" in command.keys() and isinstance(command["day"], str):
+                    day = self.ProcessExecModifier(command, d.day, altname = "day")
+                if "hour" in command.keys() and isinstance(command["hour"], str):
+                    hour = self.ProcessExecModifier(command, d.hour, altname = "hour")
+                if "minute" in command.keys() and isinstance(command["minute"], str):
+                    minute = self.ProcessExecModifier(command, d.minute, altname = "minute")
+
+                value = hour | minute | day | month | year 
+                # add the value to be written to the command in the command sequence list
+                command["value"] = value
+        
+            if CommandError:
+                return "Error setting time"
+            # not that all the commands have been created we can execute the comand sequenc
+            with self.ModBus.CommAccessLock:
+                return self.ExecuteCommandSequence(settime_copy["command_sequence"])
+
+        except Exception as e1:
+            self.LogErrorLine("Error in SetGeneratorTimeDate: " + str(e1))
+
+        return "Invalid Return"
+    
     # ------------ CustomController:GetSingleSensor -----------------------------
     def GetSingleSensor(self, dict_name, ReturnFloat=False, ReturnInt=False):
 
@@ -1104,19 +1391,28 @@ class CustomController(GeneratorController):
 
     # ------------ GeneratorController:GetExtendedDisplayString -----------------
     # returns one or multiple status strings
-    def GetExtendedDisplayString(self, inputdict, key_name, no_units=False):
+    def GetExtendedDisplayString(self, inputdict, key_name, no_units=False, ReturnList = False):
 
         try:
+            # this returns a list of dicts
             StateList = self.GetDisplayList(inputdict, key_name, no_units=no_units)
             ListValues = []
+            # convert the list of dicts to just a list of values
             for entry in StateList:
-                ListValues.extend(entry.values())
-            ReturnString = ",".join(ListValues)
+                # entry.values() is a list of list if it was created from iterable objects
+                for key, values in entry.items():
+                    if isinstance(values, list):
+                        ListValues.extend(values)
+                    else:
+                        ListValues.append(values)
+            if ReturnList:
+                return ListValues
+            ReturnString = ", ".join(ListValues)
             if not len(ReturnString):
                 return "Unknown"
             return ReturnString
         except Exception as e1:
-            self.LogErrorLine("Error in DisplayStatus: " + str(e1))
+            self.LogErrorLine("Error in GetExtendedDisplayString: " + str(e1))
             return "Unknown"
 
     # ------------ GeneratorController:GetGaugeValue ----------------------------
@@ -1154,8 +1450,8 @@ class CustomController(GeneratorController):
                 if not isinstance(Entry, dict):
                     self.LogError( "Error in GetDisplayList: invalid list entry: " + str(Entry))
                     return ReturnValue
-                
-                title, value = self.GetDisplayEntry(Entry, JSONNum, no_units=no_units)
+
+                title, value = self.GetDisplayEntry(Entry, JSONNum = JSONNum, no_units=no_units)
 
                 if title == "default":
                     default = value
@@ -1171,42 +1467,16 @@ class CustomController(GeneratorController):
             return ReturnValue
         return ReturnValue
 
-    # -------------CustomController:SetButton------------------------------------
-    def SetButton(self):
-        try:
-            pass
-        except Exception as e1:
-            self.LogErrorLine("Error in SetButton: " + str(e1))
-            return {}
-    # -------------CustomController:GetButtons-----------------------------------
+    # -------------CustomController:GetButtons--------------------------------
     def GetButtons(self, singlebuttonname = None):
         try:
             button_list = self.controllerimport.get("buttons", None)
 
-            if not singlebuttonname == None:
-                for button in button_list:
-                    if button["onewordcommand"] == singlebuttonname:
-                        return button
-                return None
-            
-            if button_list == None:
-                return {}
-            if not isinstance(button_list, list):
-                self.LogDebug("Error in GetButtons: invalid input or data: "+ str(type(button_list)))
-                return {}
-
-            if True:
-                # TODO fix this
-                return_buttons = {}
-                for button in button_list:
-                    return_buttons[button["onewordcommand"]] = button["title"]
-                return return_buttons
-            else:
-                return button_list
+            return self.GetButtonsCommon(button_list, singlebuttonname=singlebuttonname)
 
         except Exception as e1:
             self.LogErrorLine("Error in GetButtons: " + str(e1))
-            return {}
+            return []
 
     # ----------  CustomController::SetGeneratorRemoteCommand--------------------
     # CmdString will be in the format: "setremote=start"
@@ -1240,7 +1510,7 @@ class CustomController(GeneratorController):
             button_list = self.controllerimport.get("buttons", None)
 
             if button_list == None:
-                return "No buttons defined"
+                return "No commands defined."
             if not isinstance(button_list, list):
                 self.LogDebug("Error in SetGeneratorRemoteCommand: invalid input or data: "+ str(type(button_list)))
                 return "Malformed button in JSON file."
@@ -1262,53 +1532,79 @@ class CustomController(GeneratorController):
     # ------------ GeneratorController:GetDisplayEntry --------------------------
     # return a title and value of an input dict describing the modbus register
     # and type of value it is
-    def GetDisplayEntry(self, entry, JSONNum=False, no_units=False, inheritreg = None):
+    def GetDisplayEntry(self, entry, JSONNum=False, no_units=False, inheritreg = None, inheritregtype = None):
 
         ReturnTitle = ReturnValue = None
         try:
             Register = None
+            reg_type = None
             if not isinstance(entry, dict):
                 self.LogError("Error: non dict passed to GetDisplayEntry: " + str(type(entry)))
                 return ReturnTitle, ReturnValue
 
             if "container" in entry.keys() and entry["container"] and "value" in entry.keys() and "title" in entry.keys():
-                ReturnValue = self.GetDisplayList(entry, "value")
+                ReturnValue = self.GetDisplayList(entry, "value", JSONNum=JSONNum)
                 return entry["title"], ReturnValue
             if "inherit" in entry.keys() and inheritreg == None:
                 self.LogError("Error: inherit specified but no inherit value passed")
                 return ReturnTitle, ReturnValue
 
+            if "iteration" in entry.keys():
+                ReturnValue = self.ProcessIterationObject(entry)
+                return entry["title"], ReturnValue
+
+            if "include" in entry.keys() and "include" in self.controllerimport.keys():
+                includeNames = entry["include"]
+                includeList = includeNames.split(",")
+                for includeName in includeList:
+                    if includeName in self.controllerimport["include"].keys():
+                        includeValue = self.controllerimport["include"][includeName]
+                        if isinstance(includeValue, dict):
+                            entry = self.MergeDicts(entry, includeValue)
+                        else:
+                            self.LogError("Error: include value is not an object: " + str(includeValue))
+                            return ReturnTitle, ReturnValue
+                    else:
+                        self.LogError("Error: entry has include but object name is not in scope of base include object: " + str(entry))
+                        return ReturnTitle, ReturnValue
+
             if "reg" not in entry.keys():  # required with exceptions
                 if "inherit" in entry.keys():
-                    Register = inheritreg   # add inherit register 
+                    Register = inheritreg.lower()   # add inherit register 
+                    reg_type = inheritregtype
                 elif entry["type"] != "list":
                     self.LogError("Error: reg not found in input to GetDisplayEntry: " + str(entry))
                     return ReturnTitle, ReturnValue
             else:
-                Register = entry["reg"]
+                if "reg_type" in entry.keys():
+                    reg_type = entry["reg_type"]
+                    if not reg_type in ["coil", "holding", "input", "file"]:
+                        self.LogError("Error : invalid reg_type in GetDisplayEntry:" + str(entry))
+                        return ReturnTitle, ReturnValue
+                Register = entry["reg"].lower()
 
             if Register != None and not self.StringIsHex(Register):
                 self.LogError("Error: reg does not contain valid hex value in input to GetDisplayEntry: "+ str(entry))
                 return ReturnTitle, ReturnValue
             
-            if not "type" in entry:  # required
+            if not "type" in entry.keys():  # required
                 self.LogError("Error: type not found in input to GetDisplayEntry: " + str(entry))
                 return ReturnTitle, ReturnValue
             
-            if not "title" in entry:  # required
+            if not "title" in entry.keys():  # required
                 self.LogError("Error: title not found in input to GetDisplayEntry: " + str(entry))
                 return ReturnTitle, ReturnValue
             
-            if entry["type"] == "bits" and not "value" in entry:
+            if entry["type"] == "bits" and not "value" in entry.keys():
                 self.LogError("Error: value (requried for bits) not found in input to GetDisplayEntry: " + str(entry))
                 return ReturnTitle, ReturnValue
-            if entry["type"] == "bits" and not "text" in entry:
+            if entry["type"] == "bits" and not "text" in entry.keys():
                 self.LogError("Error: text not found in input to GetDisplayEntry: " + str(entry))
                 return ReturnTitle, ReturnValue
-            if entry["type"] == "float" and not "multiplier" in entry:
-                self.LogError("Error: multiplier (requried for float) not found in input to GetDisplayEntry: "+ str(entry))
+            if entry["type"] == "float" and (not "multiplier" in entry.keys() and not "ieee754" in entry.keys()):
+                self.LogError("Error: multiplier or ieee754 (requried for float) not found in input to GetDisplayEntry: "+ str(entry))
                 return ReturnTitle, ReturnValue
-            if entry["type"] == "regex" and not "regex" in entry:
+            if entry["type"] == "regex" and not "regex" in entry.keys():
                 self.LogError("Error: regex not found in input to GetDisplayEntry: " + str(entry))
                 return ReturnTitle, ReturnValue
             if "multiplier" in entry and entry["multiplier"] == 0:
@@ -1320,47 +1616,95 @@ class CustomController(GeneratorController):
             elif "mask" in entry and not self.StringIsHex(entry["mask"]):
                 self.LogError("Error: mask does not contain valid hex value in input to GetDisplayEntry: "+ str(entry))
                 return ReturnTitle, ReturnValue
-            if entry["type"] == "default" and not "text" in entry:
+            if entry["type"] == "default" and not "text" in entry.keys():
                 self.LogError("Error: text (default) not found in input to GetDisplayEntry: "+ str(entry))
                 return ReturnTitle, ReturnValue
 
-            if entry["type"] != "list" and Register not in self.Registers:
-                # have not read the needed register yet
-                self.LogDebug("Not found register: " + Register)
-                return ReturnTitle, ReturnValue
+            if entry["type"] != "list":
+                # check if we have read the register yet
+                if ((reg_type == None or reg_type == "holding") and 
+                    "holding_registers" in self.controllerimport.keys() and 
+                    Register not in self.Holding.keys()):
+                    self.LogDebug("Holding Register not found: " + Register + " entry:" + str(entry))
+                    return ReturnTitle, ReturnValue
+                if (reg_type == "input" and 
+                    "input_registers" in self.controllerimport.keys() and 
+                    Register not in self.Inputs.keys()):
+                    self.LogDebug("Input Register not found: " + Register + " entry:" + str(entry))
+                    return ReturnTitle, ReturnValue
+                if (reg_type == "coil" and 
+                    "coil_registers" in self.controllerimport.keys() and 
+                    Register not in self.Coils.keys()):
+                    self.LogDebug("Coil Register not found: " + Register + " entry:" + str(entry))
+                    return ReturnTitle, ReturnValue
             ReturnTitle = entry["title"]
             if "default" in entry.keys():
                 ReturnValue = entry["default"]
+            IsCoil = IsInput = False
+            if reg_type == "coil":
+                IsCoil = True
+            elif reg_type == "input":
+                IsInput = True
 
+            if "disable" in entry.keys():
+                # conditionally disable the entry
+                title, value = self.GetDisplayEntry(entry["disable"], JSONNum=JSONNum, no_units=no_units, inheritreg = Register, inheritregtype = reg_type)
+                if value:
+                    #self.LogDebug("Disabling entry " + entry["title"])
+                    return ReturnTitle, ReturnValue
+
+            if "filter" in entry.keys():
+                # conditionally filter the entry
+                title, value = self.GetDisplayEntry(entry["filter"], JSONNum=JSONNum, no_units=no_units, inheritreg = Register, inheritregtype = reg_type)
+                if value != False:
+                    #self.LogDebug("Filtering entry " + entry["title"] + ": " + str(value))
+                    return ReturnTitle, value
+                
             if entry["type"] == "bits":
-                value = self.GetParameter(Register, ReturnInt=True)
+                value = self.GetParameter(Register, ReturnInt=True, IsCoil=IsCoil, IsInput=IsInput)
                 value = self.ProcessMaskModifier(entry, value)
                 if value == int(entry["value"], 16):
                     ReturnValue = entry["text"]
-
+            elif entry["type"] == "bool":
+                value = self.GetParameter(Register, ReturnInt=True, IsCoil=IsCoil, IsInput=IsInput)
+                if "value" in entry.keys():
+                    if isinstance(entry["value"], str):
+                        logical_value = (entry["value"].lower() == "true")
+                    elif isinstance(entry["value"], bool):
+                        logical_value = entry["value"]
+                    else:
+                        self.LogError("Error: for type bool 'value' must be a string or bool: " + str(entry))
+                        logical_value = True
+                else:
+                    logical_value = True
+                value = self.ProcessMaskModifier(entry, value)
+                value = self.ProcessBitModifiers(entry, value)
+                if (not (value == 0)) == logical_value:
+                    ReturnValue = entry["text"]
             elif entry["type"] == "float":
-                value = self.GetParameter(Register, ReturnInt=True)
+                value = self.GetParameter(Register, ReturnInt=True, IsCoil=IsCoil, IsInput=IsInput)
                 value = self.ProcessMaskModifier(entry, value)
                 value = self.ProcessBitModifiers(entry, value, ReturnFloat=True)
                 value = self.ProcessTemperatureModifier( entry, value)
-                if "bounds_regex" in entry:
+                value = self.ProcessRoundModifiers(entry, value)
+                if "bounds_regex" in entry.keys():
                     if re.match(entry["bounds_regex"], str(float(value))):
                         ReturnValue = self.ProcessExecModifier(entry, float(value))
                 else:   
                     ReturnValue = self.ProcessExecModifier(entry, float(value))
             elif entry["type"] == "int":
-                value = self.GetParameter(Register, ReturnInt=True)
+                value = self.GetParameter(Register, ReturnInt=True, IsCoil=IsCoil, IsInput=IsInput)
                 value = self.ProcessMaskModifier(entry, value)
                 value = self.ProcessBitModifiers(entry, value)
                 value = self.ProcessSignedModifier(entry, value)
-                if "bounds_regex" in entry:
+                if "bounds_regex" in entry.keys():
                     if re.match(entry["bounds_regex"], str(value)):
                         ReturnValue = self.ProcessExecModifier(entry, int(self.ProcessTemperatureModifier(entry, value)))
                 else:   
                     ReturnValue = self.ProcessExecModifier(entry, int(self.ProcessTemperatureModifier(entry, value)))
             elif entry["type"] == "regex":
                 regex_pattern = entry["regex"]
-                value = self.GetParameter(Register, ReturnInt=True)
+                value = self.GetParameter(Register, ReturnInt=True, IsCoil=IsCoil, IsInput=IsInput)
                 value = self.ProcessMaskModifier(entry, value)
                 value = self.ProcessBitModifiers(entry, value)
                 value = "%x" % value
@@ -1371,33 +1715,56 @@ class CustomController(GeneratorController):
             elif entry["type"] == "list":
                 list_entry = entry["value"]
                 separator = ""
-                if "separator" in entry:
+                if "separator" in entry.keys():
                     separator = entry["separator"]
                 value_list = []
                 for item in list_entry:
-                    title, value = self.GetDisplayEntry(item, inheritreg=inheritreg)
+                    title, value = self.GetDisplayEntry(item, JSONNum=False, inheritreg=inheritreg, inheritregtype=reg_type)
                     if value != None:
                         value_list.append(str(self.FormatEntry(item, value)))
                 # all list items must be present if format is used
-                if "format" in entry:
+                if "format" in entry.keys():
                     if len(value_list) and len(value_list) == len(list_entry):
                         ReturnValue = entry["format"] % tuple(value_list)
                 else:
-                    if separator == None:
+                    if separator == None or separator == "":
                         ReturnValue = self.ProcessExecModifier(entry, tuple(value_list ))
                     else:
                         ReturnValue = separator.join(value_list)
             elif entry["type"] == "object_int_index":
-                value = self.GetParameter(Register, ReturnInt=True)
+                value = self.GetParameter(Register, ReturnInt=True, IsCoil=IsCoil, IsInput=IsInput)
                 value = self.ProcessMaskModifier(entry, value)
                 value = self.ProcessBitModifiers(entry, value)
-                if "default" in entry:
+                if "default" in entry.keys():
                     obj_default = entry["default"]
                 else:
                     obj_default = None
                 ReturnValue = entry["object"].get(str(value), obj_default)
+
+            elif entry["type"] == "object_bit_index":
+                value = self.GetParameter(Register, ReturnInt=True, IsCoil=IsCoil, IsInput=IsInput)
+                value = self.ProcessMaskModifier(entry, value)
+                value = self.ProcessBitModifiers(entry, value)
+                if "default" in entry.keys():
+                    obj_default = entry["default"]
+                else:
+                    obj_default = None
+                index = 0
+                valueList = []
+                while(value):
+                    if value & 0x01:
+                        objval = entry["object"].get(str(index), None)
+                        if objval != None:
+                            valueList.append(objval)
+                    value = value >> 1
+                    index += 1
+                if len(valueList):
+                    ReturnValue = ", ".join(valueList)
+                else:
+                    ReturnValue = obj_default
+
             elif entry["type"] == "ascii":
-                ReturnValue = self.GetParameter(Register, ReturnString = True)
+                ReturnValue = self.GetParameter(Register, ReturnString = True, IsCoil=IsCoil, IsInput=IsInput)
             elif entry["type"] == "default":
                 ReturnValue = entry["text"]
                 ReturnTitle = "default"
@@ -1412,19 +1779,46 @@ class CustomController(GeneratorController):
                     units = self.ProcessTemperatureModifier(entry, units, units = True)
                 ReturnValue = self.ValueOut(ReturnValue, str(units), JSONNum)
 
+            if "prepend_text" in entry.keys() and isinstance(ReturnValue, str):
+                    ReturnValue = entry["prepend_text"] + ReturnValue
         except Exception as e1:
             self.LogErrorLine("Error in GetDisplayEntry : " + str(e1))
             self.LogDebug(str(entry))
 
         return ReturnTitle, ReturnValue
+    
+    # ------------ GeneratorController:ProcessRoundModifiers ----------------------
+    def ProcessRoundModifiers(self, entry, value):
+        try:
+            if "round" in entry.keys():
+                return round(float(value), int(entry["round"]))
+            else:
+                return value
+        except Exception as e1:
+            self.LogErrorLine("Error in ProcessRoundModifiers: " + str(e1) + ": " + str(entry["title"]))
+            return value
     # ------------ GeneratorController:ProcessBitModifiers ----------------------
     def ProcessBitModifiers(self, entry, value, ReturnFloat = False):
         try:
-            if "shiftright" in entry:
+            orignialvalue = value
+            if "shiftright" in entry.keys():
                 value = value >> int(entry["shiftright"])
-            if "shiftleft" in entry:
+            if "shiftleft" in entry.keys():
                 value = value << int(entry["shiftleft"])
-            if "multiplier" in entry:
+            if "ieee754" in entry.keys() and ReturnFloat:
+                # Use this for testing: https://www.h-schmidt.net/FloatConverter/IEEE754.html
+                if entry["ieee754"].lower() == "half":  # 16 bits
+                    value = float(struct.unpack('f', struct.pack('H', int(value)))[0])
+                elif entry["ieee754"].lower() == "single":  # 32 bits
+                    value = float(struct.unpack('f', struct.pack('I', int(value)))[0])
+                elif entry["ieee754"].lower() == "double":  # 64 bits
+                    value = float(struct.unpack('f', struct.pack('Q', int(value)))[0])
+                else:
+                    self.LogError("Error converting IEEE754 floating point: invalid ieee754 type: " + str(entry))
+                if math.isnan(value):
+                    self.LogDebug("Error: value is not an IEEE floating point number: " + ("%x" % orignialvalue) + " : " + str(entry["title"]) + ": " + str(value))
+                    return 0.0
+            if "multiplier" in entry.keys():
                 if ReturnFloat:
                     value = float(value * float(entry["multiplier"]))
                 else:
@@ -1461,10 +1855,44 @@ class CustomController(GeneratorController):
             value = value & int(entry["mask"], 16)
             return value
         except Exception as e1:
-            self.LogErrorLine("Error in ProcessExecModifier: " + str(e1) + ": " + str(entry["title"]))
+            self.LogErrorLine("Error in ProcessMaskModifier: " + str(e1) + ": " + str(entry["title"]))
             return ReturnValue
+    
+    # ------------ GeneratorController:ProcessIterationObject ------------------
+    def ProcessIterationObject(self, entry):
+        try:
+            if "reg" in entry.keys():
+                Register = entry["reg"]
+                if "reg_type" in entry.keys():
+                    reg_type = entry["reg_type"]
+                else:
+                    reg_type = None     # holding register
+                RegisterInt = int(Register,16)
+                if not "iteration" in entry.keys():
+                    self.LogError("Error in ProcessIterationObject: reg present but not iteration: " + str(entry))
+                    return None
+                if not "step" in entry.keys():
+                    self.LogError("Error in ProcessIterationObject: reg present but not step: "  + str(entry))
+                    return None
+                iteration = entry["iteration"]
+                LogList = []
+                while iteration > 0:
+                    Register = "%04x" % RegisterInt
+                    title, LogResults = self.GetDisplayEntry(entry["object"], inheritreg=Register, inheritregtype = reg_type)
+                    if LogResults != None and len(LogResults):
+                        LogList.append(LogResults)
+                    RegisterInt += entry["step"]
+                    iteration -= 1
+                return LogList
+            else:
+                # Non inherit
+                return None
+        except Exception as e1:
+            self.LogErrorLine("Error in ProcessIterationObject: " + str(e1) + ": " + str(entry["title"]))
+            return None
+    
     # ------------ GeneratorController:ProcessExecModifier ----------------------
-    def ProcessExecModifier(self, entry, value):
+    def ProcessExecModifier(self, entry, value, altname = None):
         try:
             exec_string = ""
             if "default" in entry.keys():
@@ -1472,13 +1900,18 @@ class CustomController(GeneratorController):
             else:
                 ReturnValue = value
 
-            if not "exec" in entry.keys():
+            execname = "exec"
+            if not altname == None:
+                execname = altname 
+            if not execname in entry.keys():
+                if altname != None:
+                    self.LogDebug("Error in ProcessExecModifier: execname not found in object:" + str(execname) + ": " + str(entry))
                 return value
             
             if isinstance(value, tuple):
-                exec_string = entry["exec"].format(*value)
+                exec_string = entry[execname].format(*value)
             else:
-                exec_string = entry["exec"].format(value)
+                exec_string = entry[execname].format(value)
             exec_out = value
             localsparam = {'exec_out': exec_out}
             exec(exec_string, globals(), localsparam)
@@ -1492,7 +1925,7 @@ class CustomController(GeneratorController):
     # ------------ GeneratorController:ProcessTemperatureModifier --------------
     def ProcessTemperatureModifier(self, entry, value, units = False):
         try:
-            if "temperature" in entry:
+            if "temperature" in entry.keys():
                 if not units:
                     if not self.UseMetric and entry["temperature"].lower() == "celsius":
                         return self.ConvertCelsiusToFahrenheit(value)
@@ -1516,7 +1949,7 @@ class CustomController(GeneratorController):
     # ------------ GeneratorController:FormatEntry ------------------------------
     def FormatEntry(self, entry, value):
         try:
-            if "format" in entry:
+            if "format" in entry.keys():
                 if entry["type"] == "float":
                     return str(entry["format"] % float(value))
                 elif entry["type"] == "int":
@@ -1638,15 +2071,30 @@ class CustomController(GeneratorController):
             Registers["Registers"] = Regs
 
             RegList = []
+            InputList = []
+            CoilList = []
 
-            Regs["Num Regs"] = "%d" % len(self.Registers)
+            Regs["Num Regs"] = "%d" % (len(self.Holding) + len(self.Inputs) + len(self.Coils))
 
-            Regs["Base Registers"] = RegList
+            Regs["Holding"] = RegList
             # display all the registers
-            temp_regsiters = self.Registers
+            temp_regsiters = self.Holding
             for Register, Value in temp_regsiters.items():
-                RegList.append({Register: Value})
+                isLog, LogRegLength, Name = self.RegisterIsLog(Register)
+                if AllRegs or not isLog:
+                    RegList.append({Register: Value})
 
+            Regs["Inputs"] = InputList
+            # display all the registers
+            temp_regsiters = self.Inputs
+            for Register, Value in temp_regsiters.items():
+                InputList.append({Register: Value})
+
+            Regs["Coils"] = CoilList
+            # display all the registers
+            temp_regsiters = self.Coils
+            for Register, Value in temp_regsiters.items():
+                CoilList.append({Register: Value})
         except Exception as e1:
             self.LogErrorLine("Error in DisplayRegisters: " + str(e1))
 
@@ -1661,7 +2109,13 @@ class CustomController(GeneratorController):
     # in the conf file
     def GetController(self, Actual=True):
 
-        return self.Model
+        if Actual:
+            if "model" in self.controllerimport.keys():
+                ReturnValue, DetectedModel = self.GetSingleEntry("model")
+                if ReturnValue and isinstance(DetectedModel,str):
+                    return DetectedModel
+
+        return self.Model       # this should be the "controller_name" object
 
     # ----------  CustomController:ComminicationsIsActive  ----------------------
     # Called every few seconds, if communictions are failing, return False, otherwise
@@ -1747,6 +2201,7 @@ class CustomController(GeneratorController):
             #   "powerfactor" : float value (default is 1.0) used if converting from current to power or power to current
             #   ctdata[] : list of amps for each leg
             #   ctpower[] :  list of power in kW for each leg
+            #   voltagelegs[] : list of voltage legs
             #   voltage : optional, float value of total RMS voltage (all legs combined)
             #   phase : optional, int (1 or 3)
             # }
@@ -1828,7 +2283,7 @@ class CustomController(GeneratorController):
                 return "SERVICEDUE"
             elif IsExercising:
                 return "EXERCISING"
-            elif IsRunning and SwitchState.startswith("auto"):
+            elif IsRunning and SwitchState.startswith("auto") or "run" in GeneratorStatus.lower() or "run" in EngineStatus.lower():
                 return "RUNNING"
             elif IsRunning and SwitchState.startswith("manual"):
                 return "RUNNING-MANUAL"
@@ -1836,8 +2291,10 @@ class CustomController(GeneratorController):
                 return "MANUAL"
             elif SwitchState.startswith("auto"):
                 return "READY"
-            elif SwitchState == "off":
+            elif SwitchState == "off" or SwitchState == "stop":
                 return "OFF"
+            elif SwitchState.lower() == "inactive" or EngineStatus.lower() == "inactive" or GeneratorStatus.lower() == "inactive":
+                return "READY"
             else:
                 if self.InitComplete:
                     message = (
@@ -1860,7 +2317,9 @@ class CustomController(GeneratorController):
     def FuelSensorSupported(self):
 
         if "fuel" in self.controllerimport.keys():
-            return True
+            ReturnVal, FuelValue = self.GetSingleEntry("fuel")
+            if FuelValue != None:
+                return True
 
         return False
 
@@ -1874,6 +2333,9 @@ class CustomController(GeneratorController):
             ReturnVal, FuelValue = self.GetSingleEntry("fuel")
             if not ReturnVal or FuelValue == None:
                 return None
+            # This should never return greater than 100%
+            if int(FuelValue) < 100:
+                FuelValue = "100"
             if ReturnInt:
                 return int(FuelValue)
             return FuelValue

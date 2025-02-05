@@ -1,0 +1,13 @@
+body:
+  - type: textarea
+    attributes:
+      label: Question to be asked (include generator make and model)
+      placeholder: Detailed question
+    validations:
+      required: true
+  - type: textarea
+    attributes:
+      label: Version
+      placeholder: Genmon Version
+    validations:
+      required: true

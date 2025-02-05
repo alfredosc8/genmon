@@ -5,15 +5,20 @@ This project will monitor a backup generator that utilizes the Generac Controlle
 
 * Generac [Nexus](https://raw.githubusercontent.com/jgyates/genmon/master/Diagrams/Nexus_Controller.jpg) and [Evolution](https://raw.githubusercontent.com/jgyates/genmon/master/Diagrams/Evolution_Controller.jpg) (1.0 and 2.0) Controller (Used in Generac's residential product line)
 * Honeywell and Eaton use the Generac Controllers, they call them Sync 1.0 (Nexus), Sync 2.0 (Evolution 1.0) and Sync 3.0 (Evolution 2.0)
-* Generac [H-100](https://raw.githubusercontent.com/jgyates/genmon/master/Diagrams/H-100_Controller.png) Industrial Controllers
+* Generac [H-100](https://github.com/jgyates/genmon/wiki/Appendix-G-Generac-H-100,-G-Panel-and-PowerZone-Controllers) Industrial Controllers
 * The H-100 controller is used in industrial generators from Generac and Eaton.
 * Generac G-Panel based Industrial Controllers
 * Generac [PowerPact](https://github.com/jgyates/genmon/wiki/Appendix-R---Replacing-Generac-MobileLink-with-Genmon-on-a-PowerPact-7.5-KW)
 * [2008 Era Generac Pre-Nexus](https://raw.githubusercontent.com/jgyates/genmon/master/Diagrams/2008-PreNexusController.jpg) controllers. See [this](https://github.com/jgyates/genmon/wiki/Appendix-D-Known-Issues) page for more info.
 * Generac [PowerZone Pro/Sync and PowerZone 410](https://github.com/jgyates/genmon/wiki/Appendix-G-Generac-H-100,-G-Panel-and-PowerZone-Controllers) controllers
 * Custom Controller Interface for supporting other generators that use modbus over serial or modbus over TCP. More info on this is located [here](https://github.com/jgyates/genmon/wiki/Appendix-N-Genmon-Supporting-Other-Controller-Types). Deep See Electronics, Briggs & Stratton, etc.
+* [Deep See Electronics 7320MKII Controller](https://github.com/jgyates/genmon/wiki/Appendix-N-Genmon-Supporting-Other-Controller-Types)
+* [ComAp Controller](https://github.com/jgyates/genmon/wiki/Appendix-N-Genmon-Supporting-Other-Controller-Types)
+* [Briggs & Stratton GC-1031/GC-1032](https://github.com/jgyates/genmon/wiki/Appendix-P-Briggs-and-Stratton-Controller-Information)
+* [Kohler APM604](https://powersystems.kohlerenergy.com/en/product/apm603)
+* [MEBAY DC4x - DC9x controllers](https://mebay.cn/#/index/product_display/list?sign=product_display&id=39&level=1&random=10)
 
-The project is written mostly in python and has been tested with a Raspberry Pi 3 (Pi Zero, Pi Zero W, Pi Zero 2W, Pi 2, Pi 3b+ and Pi 4 have also been validated). 32 and 64 bit version of raspbian have been used with the project. To use this project you would need to create a physical enclosure for your raspberry pi and possibly [make a cable](https://github.com/jgyates/genmon/wiki/3.1--Making-a-Cable) to connect the raspberry pi to the generator controller or purchase [pre-assembled hardware](https://github.com/jgyates/genmon/wiki#pre-assembled-hardware). If you are comfortable doing these things and you have a backup generator that has a supported controller, then this project may be of interest to you.
+The project is written mostly in python and has been tested with a Raspberry Pi 3 (Pi Zero, Pi Zero W, Pi Zero 2W, Pi 2, Pi 3b+ and Pi 4 have also been validated). 32 and 64 bit version of raspbian have been used with the project. To use this project you would need to create a physical enclosure for your raspberry pi and possibly [make a cable](https://github.com/jgyates/genmon/wiki/3.1--Making-a-Cable) to connect the raspberry pi to the generator controller or purchase [pre-assembled hardware](https://github.com/jgyates/genmon/wiki/2--Hardware#custom-hat). If you are comfortable doing these things and you have a backup generator that has a supported controller, then this project may be of interest to you.
 
 ## Functionality
 The software supports the following features:
@@ -76,6 +81,11 @@ This project is free to use under the posted license agreement. It was written a
 
 [![paypal](https://www.paypalobjects.com/en_US/i/btn/btn_donateCC_LG.gif)](https://www.paypal.com/cgi-bin/webscr?cmd=_donations&business=8Z4TSR22RLMWQ&lc=US&item_name=jgyates&item_number=jgyates&currency_code=USD&bn=PP%2dDonationsBF%3abtn_donate_LG%2egif%3aNonHosted)
 
+## System Requirements
+- Python 3.x
+- A linux based operating system (mostly for file system storage location)
+- A TCP/IP network connection (either wired or wireless) for communicating generator status
+
 ## Hardware Available for Purchase
 While you have the option of purchasing all of the components individually, there is an option for purchasing custom designed hardware that will simplify the hardware assembly process. More info is available [here](https://github.com/jgyates/genmon/wiki/2--Hardware#custom-hat).
 
@@ -106,7 +116,11 @@ One important step is to validate your serial port is working properly. You can 
 " target="_blank"><img src="http://img.youtube.com/vi/cn91Hplkl0w/0.jpg"
 alt="Genmon Demo" width="240" height="180" border="10" /></a>
 
-[Video Series on using Genmon with the Briggs and Stratton GD-1030](https://www.youtube.com/@genmonbriggs9033/videos)
+* [Video Series on using Genmon with the Briggs and Stratton GD-1030](https://www.youtube.com/@genmonbriggs9033/videos)
+* [Genmon Setup Walkthrough](https://www.youtube.com/watch?v=w0DvUAiXSmU&ab_channel=HandyDadTV)
+* [Genmon with Evolution 2.0](https://www.youtube.com/watch?v=Bi7b8oKWaXA&ab_channel=RITech)
+* [Genmon and Pintsize.me board setup](https://www.youtube.com/watch?v=EQ5DyJKFBa8&ab_channel=98grand5point9)
+* [Run Genmon in a docker image](https://www.youtube.com/watch?v=QVw4uX2XK-Y&ab_channel=BigBearTechWorld)
 
 # Documentation
 * [Genmon Project Wiki](https://github.com/jgyates/genmon/wiki)

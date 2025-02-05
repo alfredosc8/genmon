@@ -1,6 +1,107 @@
 # Change Log
 All notable changes to this project will be documented in this file.
 
+## V1.19.05 -2024-12-27
+- Added new log and alarm info for Evolution 4.5L
+- Added support for MEBAY DC4x, DC5x, DC6x, DC7x, DC8x and DC9x controllers
+- Added display of battery charger current for Evo
+- Added system IP address to most outbound notification emails
+- Corrected problem with custom controllers using even parity
+- Updated bleson python package to work around error when using genmopeka sensor add on 
+
+## V1.19.04 -2024-08-21
+- Corrected issue with saving service journal with HTTPS enabled
+- Added new alarm code for Nexus
+- Change to pysnmp library v6.x changed so locking to version 5.1.0
+- Updated method to reduce the power log
+- Minor update to force legacy writes for exercise cycles with older firmware on Evolution 1.0
+- Added option to genmqtt add on to optionally retain data at the broker
+- Updated Briggs support to include text output for better MQTT support
+- Corrected on bug in fuel calculation for 32kW Evolution based Propane Liquid Cooled units
+- Corrected bug in Briggs and Stratton controller definition. Changed name of some gauges to better describe the value.
+- Added new alarm code for Nexus Evolution
+- Minor mod to maintenance page update to allow for faster loading
+- Corrected one issue with power log error check
+- added check for python being installed in the install script
+- Corrected one error in definition of modbus exception code
+- Updated install to use version of pyopenssl from earlier in 2024 to avoid and error introduced with the new version
+- Minor update to correct formatting issue with bus voltage on PowerZone Sync
+- Added new alarm ID for internal controller fault for Evolution / Nexus
+- Updated External Temp Sensor add on to support non zero minimum values
+- More updates to allow for correct display on PowerZone Sync
+
+## V1.19.03 -2024-04-19
+- New add on program genmqttin.py. See wiki and add on page for details
+- Update to serialconfig.py to support file location changes with config.txt and cmdline.txt in latest Raspberry Pi firmware versions
+- Minor update to genmonmaint.sh to use Ubuntu serial device names if Non Raspberry pi OS detected 
+- Minor update for better error handling when getting CPU temp
+- Minor update for better error reporting with email failures
+- Corrected issue with login page errors in developer console
+- Update to mymail.py to support optional HTML format of outbound email
+- Update to genmopeka.py add on to ignore invalid readings from mopeka sensor.
+- Fixed issue with latest version of voipms. Install now uses version 0.2.5.
+- Added additional parameter checking on add on programs
+- Minor update for PowerPact model (removed display of unsupported sensors: current and power)
+- Added option in genexercise.conf to start monthly exercise on xth week day of the month (see genexercise.conf in repository for more details)
+
+## V1.19.02 -2024-02-14
+- Update for Kohler APM603 support
+- Added new commands for EvoLC
+- Added Gauges for Current Legs for Evolution Air Cooled
+- Added Advanced Setting to check for Load Imbalanced for Evo AC (built in CTs) and External CTs for Evo and Nexus. See "Unbalanced Load Capacity" on Advanced Settings page
+- Corrected bug that was introduced in last version that prevented some buttons in the web interface from showing the color as disabled
+- Minor error handling update in Fuel Logger thread
+- Minor update to controller detection for custom controller models
+- Update for 26kw Evo2 air cooled model
+- Update to genmonmaint.sh for managed python environments
+- update for paho-mqtt version change
+- Optimizations for EvoLC current calculations and Nexus exercise time calculations 
+- Update to better identify Evolution and Nexus air cooled models
+- Update to allow L1 and L2 current to be exported via MQTT and update L1 and L2 gauge nominal values
+- Added Outage Recurring Notices option, see Advanced Settings page
+- Update to force Enhanced Exercise for known supported controllers
+- Minor update to genslack add on for error handling improvements
+- Update to outage log processing to prevent invalid fuel usage for outages lasting less than one second
+
+## V1.19.01 -2023-12-06
+- Update to genmonmaint.sh to ask about serial connection type on install (thanks @skipfire)
+- Corrected issue with genloader to remove check for mopeka library that was replaced
+- Fixed issue with 'Force Integer' setting on SNMP add on to convert external tank sensors to integer properly
+- Modifications to support Raspberry Pi 5: detect pi model, enabled serial port, for pi5 default port is /dev/ttyAMA0, not /dev/serial0
+- Minor update to Briggs and Stratton maintenance alarm definition 
+- Update to genmqtt add on to support MTLS
+- Update for ComAp controller
+- Minor change to the way alarms are displayed for custom controllers
+- Updates for better error handling for custom controller
+- Add the ability to have minimum delay between short messages (e.g. callmebot signal)
+- Minor update for Deepsea controller switch state
+- More updates for ComAp controller
+- Update to gentankutil to add option to check battery and missed readings. See Add On page to enable this functionality.
+- Minor update to error handling of fuel gauge 
+- Added new option to return JSON for numerics on MQTT addon genmqtt.py
+- Alarm code and log code updates for Nexus AC and Evo LC
+
+## V1.19.00 -2023-11-09
+- Updates to genmonmain.sh, startgenmon.sh and genloader.sh for Debian bookworm. 
+- Minor update to serialconfig.py to make serial0 instead of serial1 work on bookworm
+- Updates to custom controller code to support additional modbus functions (coils and input registers)
+- Updated modbusdump to support new modbus functions
+- Updated Briggs custom controller support to use modbus function 4 in a more compatible way
+- Fixed issue with Alternate Date format option and log page heatmap
+- Enhancements to genexercise https://github.com/jgyates/genmon/issues/968 and https://github.com/jgyates/genmon/issues/958
+- custom controller updates to support writing values to the controllers via buttons with parameters
+- Added daily option to genexercise
+- Minor change to how modbus is handled when closing / restarting to prevent lockup on H-100 controller receiving a partial modbus packet
+- Update to bookworm mods to support python 3.5
+- Minor update to genmonmaint.sh to allow calling from outside the genmon folder
+- Update for more fine grained status changes (more email notifications) for H100
+- Added the ability to set the time for custom controllers 
+- Minor update to gensnmp to compensate for invalid setting in genmon.conf
+- Added reading time to Briggs and Stratton custom controller config
+- Updated genmopeka.py add on to support more mopeka sensors and stop using old mopeka python library
+- Minor update to disable MFA if HTTPS is not enabled
+- Corrected with with MQTT Numerics for custom controllers
+
 ## V1.18.18 -2023-07-05
 - Added new add on program gencallmebot (thanks @buschauer)
 - Added preliminary support for PowerZone 410 controller
@@ -20,6 +121,13 @@ All notable changes to this project will be documented in this file.
 - Updated alarm code for Evolution 2.0
 - Added genmon.conf entries for using loopback IP address for listen address in server
 - Update to current calculation for liquid cooled Evolution
+- Update to gensnmp.py to allow user defined SNMP entries
+- Fixed issue with page reload after saving service journal 
+- Change for external CT gauge display when using gencthat.py add on
+- Fixed bug that may prohibit some add on programs from working at the same time
+- Added more bounds checking to gentemp.py
+- Corrected issue with Settings page not allows Even parity to be set on custom controllers
+- Corrected security issue related to ldap login with genserv.py
 
 ## V1.18.17 -2023-04-06
 - Added feature request to allow external temperature sensors to be displayed as gauges

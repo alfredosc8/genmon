@@ -49,8 +49,6 @@ except Exception as e1:
     print("Error: " + str(e1))
     sys.exit(2)
 
-GENMON_VERSION = "V1.18.18"
-
 # ------------ Monitor class ----------------------------------------------------
 class Monitor(MySupport):
     def __init__(self, ConfigFilePath=ProgramDefaults.ConfPath):
@@ -71,9 +69,8 @@ class Monitor(MySupport):
         self.SiteName = "Home"
         self.ServerSocket = None
         self.ServerIPAddress = ""
-        self.ServerSocketPort = (
-            ProgramDefaults.ServerPort
-        )  # server socket for nagios heartbeat and command/status
+        # server socket for nagios heartbeat and command/status
+        self.ServerSocketPort = ProgramDefaults.ServerPort
         self.IncomingEmailFolder = "Generator"
         self.ProcessedEmailFolder = "Generator/Processed"
 
@@ -83,15 +80,14 @@ class Monitor(MySupport):
         self.NumberOfLogSizeErrors = 0
         # set defaults for optional parameters
         self.NewInstall = False  # True if newly installed or newly upgraded version
-        self.FeedbackEnabled = (
-            False  # True if sending autoated feedback on missing information
-        )
+        # True if sending autoated feedback on missing information
+        self.FeedbackEnabled = False  
         self.FeedbackMessages = {}
-        self.OneTimeMessages = {}
+
         self.MailInit = False  # set to true once mail is init
-        self.CommunicationsActive = (
-            False  # Flag to let the heartbeat thread know we are communicating
-        )
+        # Flag to let the heartbeat thread know we are communicating
+        self.CommunicationsActive = False
+
         self.Controller = None
         self.ControllerSelected = None
         self.bDisablePlatformStats = False
@@ -105,6 +101,7 @@ class Monitor(MySupport):
         self.DisableWeather = False
         self.MyWeather = None
         self.UpdateAvailable = False
+        self.UpdateVersion = None
 
         # Time Sync Related Data
         self.bSyncTime = False  # Sync gen to system time
@@ -194,23 +191,28 @@ class Monitor(MySupport):
             self.InterfaceServerThread, Name="InterfaceServerThread"
         )
 
-        # init mail, start processing incoming email
-        self.mail = MyMail(
-            monitor=True,
-            incoming_folder=self.IncomingEmailFolder,
-            processed_folder=self.ProcessedEmailFolder,
-            incoming_callback=self.ProcessCommand,
-            loglocation=self.LogLocation,
-            ConfigFilePath=ConfigFilePath,
-        )
+        try:
+            # init mail, start processing incoming email
+            self.mail = MyMail(
+                monitor=True,
+                incoming_folder=self.IncomingEmailFolder,
+                processed_folder=self.ProcessedEmailFolder,
+                incoming_callback=self.ProcessCommand,
+                loglocation=self.LogLocation,
+                ConfigFilePath=ConfigFilePath,
+            )
 
-        self.Threads = self.MergeDicts(self.Threads, self.mail.Threads)
-        self.MailInit = True
+            self.Threads = self.MergeDicts(self.Threads, self.mail.Threads)
+            self.MailInit = True
+        except Exception as e1:
+            self.LogErrorLine("Error loading mail support: " + str(e1))
+            sys.exit(1)
 
         self.FeedbackPipe = MyPipe(
             "Feedback",
             self.FeedbackReceiver,
             log=self.log,
+            debug = self.debug,
             ConfigFilePath=self.ConfigFilePath,
         )
         self.Threads = self.MergeDicts(self.Threads, self.FeedbackPipe.Threads)
@@ -218,6 +220,7 @@ class Monitor(MySupport):
             "Message",
             self.MessageReceiver,
             log=self.log,
+            debug = self.debug,
             nullpipe=self.mail.DisableSNMP,
             ConfigFilePath=self.ConfigFilePath,
         )
@@ -300,6 +303,8 @@ class Monitor(MySupport):
             + str(sys.version_info.major)
             + "."
             + str(sys.version_info.minor)
+            + ": VEnv: "
+            + str(self.InVirtualEnvironment())
         )
 
     # ------------------------ Monitor::StartThreads----------------------------
@@ -338,6 +343,8 @@ class Monitor(MySupport):
         try:
             if self.config.HasOption("sitename"):
                 self.SiteName = self.config.ReadValue("sitename")
+
+            self.debug = self.config.ReadValue("debug", return_type=bool, default=False)
 
             self.multi_instance = self.config.ReadValue(
                 "multi_instance", return_type=bool, default=False
@@ -517,15 +524,6 @@ class Monitor(MySupport):
             MessageDict = {}
             MessageDict = json.loads(Message)
 
-            if MessageDict["onlyonce"]:
-                Subject = self.OneTimeMessages.get(MessageDict["subjectstr"], None)
-                if Subject == None:
-                    self.OneTimeMessages[MessageDict["subjectstr"]] = MessageDict[
-                        "msgstr"
-                    ]
-                else:
-                    return
-
             self.mail.sendEmail(
                 MessageDict["subjectstr"],
                 MessageDict["msgstr"],
@@ -570,7 +568,6 @@ class Monitor(MySupport):
                         {"Comm Stats": self.Controller.GetCommStatus()}, ""
                     )
                 )
-                msgbody += self.Controller.DisplayRegisters(AllRegs=FullLogs)
 
                 msgbody += "\n" + self.GetSupportData() + "\n"
                 if self.FeedbackEnabled:
@@ -617,13 +614,13 @@ class Monitor(MySupport):
             SupportData["Comm Stats"] = self.Controller.GetCommStatus()
             if not self.bDisablePlatformStats:
                 SupportData["PlatformStats"] = self.GetPlatformStats()
-            SupportData["Data"] = self.Controller.DisplayRegisters(
-                AllRegs=True, DictOut=True
-            )
+            #SupportData["Data"] = self.Controller.DisplayRegisters(AllRegs=True, DictOut=True)
             # Raw Modbus data
-            SupportData["Registers"] = self.Controller.Registers
+            SupportData["Holding"] = self.Controller.Holding
             SupportData["Strings"] = self.Controller.Strings
             SupportData["FileData"] = self.Controller.FileData
+            SupportData["Coils"] = self.Controller.Coils
+            SupportData["Inputs"] = self.Controller.Inputs
         except Exception as e1:
             self.LogErrorLine("Error in GetSupportData: " + str(e1))
 
@@ -650,6 +647,7 @@ class Monitor(MySupport):
                 "gensms.log",
                 "gensms_modem.log",
                 "genmqtt.log",
+                "genmqttin.log",
                 "genpushover.log",
                 "gensyslog.log",
                 "genloader.log",
@@ -711,7 +709,7 @@ class Monitor(MySupport):
                 )
             )
 
-            msgbody += self.Controller.DisplayRegisters(AllRegs=True)
+            #msgbody += self.Controller.DisplayRegisters(AllRegs=True)
 
             # get data in JSON format
             msgbody += "\n" + self.GetSupportData() + "\n"
@@ -735,6 +733,7 @@ class Monitor(MySupport):
     # ---------- Send message ---------------------------------------------------
     def SendMessage(self, CmdString):
         try:
+            self.LogDebug("ENTER SendMessage")
             if CmdString == None or CmdString == "":
                 return "Error: invalid command in SendMessage"
 
@@ -752,8 +751,13 @@ class Monitor(MySupport):
                 onlyonce = False
             else:
                 onlyonce = data["onlyonce"]
+            if not "oncedaily" in data:
+                oncedaily = False
+            else:
+                oncedaily = data["oncedaily"]
+            self.LogDebug("SENDMSG:" + str(data))
             self.MessagePipe.SendMessage(
-                msgtitle, data["body"], msgtype=data["type"], onlyonce=onlyonce
+                msgtitle, data["body"], msgtype=data["type"], onlyonce=onlyonce, oncedaily=oncedaily
             )
             return "OK"
         except Exception as e1:
@@ -892,8 +896,8 @@ class Monitor(MySupport):
                 "sendlogfiles": [self.SendSupportInfo, (True,), True],
                 "support_data_json": [self.GetSupportData, (), True],
                 "set_tank_data": [self.Controller.SetExternalTankData, (command,), True],
-                "set_temp_data": [self.Controller.SetExternalTemperatureData,(command,),True,],
-                "set_temp_bounds": [self.Controller.SetExternalTemperatureBounds,(command,),True,],
+                "set_sensor_data": [self.Controller.SetExternalSensorData,(command,),True,],
+                "set_external_gauge_data": [self.Controller.SetExternalGaugeData,(command,),True,],
                 "set_power_data": [self.Controller.SetExternalCTData, (command,), True],
                 "notify_message": [self.SendMessage, (command,), True],
                 "getreglabels_json": [self.Controller.GetRegisterLabels, (), True],
@@ -1065,12 +1069,12 @@ class Monitor(MySupport):
             return "Unknown"
 
     # ------------ Monitor::GetWeatherData --------------------------------------
-    def GetWeatherData(self, ForUI=False):
+    def GetWeatherData(self, ForUI=False, JSONNum=False):
 
         if self.MyWeather == None:
             return None
 
-        ReturnData = self.MyWeather.GetWeather(minimum=self.WeatherMinimum, ForUI=ForUI)
+        ReturnData = self.MyWeather.GetWeather(minimum=self.WeatherMinimum, ForUI=ForUI, JSONNum=JSONNum)
 
         if not len(ReturnData):
             return None
@@ -1079,7 +1083,7 @@ class Monitor(MySupport):
     # ------------ Monitor::GetUserDefinedData ----------------------------------
     # this assumes one json object, the file can be formatted (i.e. on multiple
     # lines) or can be on a single line
-    def GetUserDefinedData(self):
+    def GetUserDefinedData(self, JSONNum=False):
 
         try:
             FileName = os.path.join(self.UserDefinedDataPath, "userdefined.json")
@@ -1144,7 +1148,7 @@ class Monitor(MySupport):
             )
 
             if not self.bDisablePlatformStats:
-                PlatformStats = self.GetPlatformStats()
+                PlatformStats = self.GetPlatformStats(JSONNum=False)
                 if not PlatformStats == None:
                     MonitorData.append({"Platform Stats": PlatformStats})
 
@@ -1180,7 +1184,7 @@ class Monitor(MySupport):
 
             StartInfo["python"] = str(platform.python_version())
 
-            Platform = MyPlatform(log=self.log, usemetric=True)
+            Platform = MyPlatform(log=self.log, usemetric=True, debug = self.debug)
             StartInfo["os_bits"] = Platform.PlatformBitDepth()
 
         except Exception as e1:
@@ -1438,6 +1442,7 @@ class Monitor(MySupport):
                                         title, msgbody, msgtype="info", onlyonce=True
                                     )
                                     self.UpdateAvailable = True
+                                    self.UpdateVersion = value
 
                 except Exception as e1:
                     self.LogErrorLine("Error checking for software update: " + str(e1))

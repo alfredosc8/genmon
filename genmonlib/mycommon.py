@@ -12,6 +12,7 @@
 import json
 import os
 import sys
+import re
 
 from genmonlib.program_defaults import ProgramDefaults
 
@@ -27,6 +28,26 @@ class MyCommon(object):
         self.debug = False
         self.MaintainerAddress = "generatormonitor.software@gmail.com"
 
+    # ------------ MyCommon::InVirtualEnvironment -------------------------------
+    def InVirtualEnvironment(self):
+        try:
+            return (hasattr(sys, 'real_prefix') or
+                (hasattr(sys, 'base_prefix') and sys.base_prefix != sys.prefix))
+        except:
+            return False
+    # ------------ MyCommon::InManagedLibaries ----------------------------------
+    def ManagedLibariesEnabled(self):
+        try:
+            #  /usr/lib/python3.11/EXTERNALLY-MANAGED
+            # to support python 3.5 not use formatted strings
+            managedfile = "/usr/lib/python" + str(sys.version_info.major) + "." + str(sys.version_info.minor) + "/EXTERNALLY-MANAGED"
+            #managedfile = f"/usr/lib/python{sys.version_info.major:d}.{sys.version_info.minor:d}/EXTERNALLY-MANAGED"
+            if os.path.isfile(managedfile):
+                return True
+            else:
+                return False
+        except:
+            return False
     # ------------ MyCommon::VersionTuple ---------------------------------------
     def VersionTuple(self, value):
 
@@ -141,6 +162,19 @@ class MyCommon(object):
 
         return answer.strip()
 
+    # ------------ MyCommon::ConvertToNumber------------------------------------
+    # convert a string to an int or float, removes non string characters
+    def ConvertToNumber(self, value):
+        try:
+            return_value = re.sub('[^0-9.\-]','',value)
+            try:
+                return_value = int(return_value)
+            except:
+                return_value = float(return_value)
+            return return_value
+        except Exception as e1:
+             self.LogErrorLine("Error in MyMQTT:ConvertToNumber: " + str(e1) + ": " + str(value))
+             return 0
     # ------------ MyCommon::MergeDicts -----------------------------------------
     def MergeDicts(self, x, y):
         # Given two dicts, merge them into a new dict as a shallow copy.
@@ -165,22 +199,20 @@ class MyCommon(object):
         return url
 
     # -------------MyCommon::LogHexList------------------------------------------
-    def LogHexList(self, listname, prefix=None):
+    def LogHexList(self, listname, prefix=None, nolog = False):
 
         try:
+            outstr = ""
+            outstr = "[" + ",".join("0x{:02x}".format(num) for num in listname) + "]"
             if prefix != None:
-                self.LogError(
-                    prefix
-                    + " = ["
-                    + ",".join("0x{:02x}".format(num) for num in listname)
-                    + "]"
-                )
-            else:
-                self.LogError(
-                    "[" + ",".join("0x{:02x}".format(num) for num in listname) + "]"
-                )
+                outstr = prefix + " = " + outstr
+
+            if nolog == False:
+                self.LogError(outstr)
+            return outstr
         except Exception as e1:
             self.LogErrorLine("Error in LogHexList: " + str(e1))
+            return outstr
 
     # ---------------------------------------------------------------------------
     def LogInfo(self, message, LogLine=False):

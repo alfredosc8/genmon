@@ -803,7 +803,7 @@ class PowerZone(GeneratorController):
                         callbackparameters=(
                             self.Reg.TOTAL_POWER_KW[REGISTER],
                             None,
-                            None,
+                            1000,       # Divider 1000?
                             False,
                             True,
                             False,
@@ -820,7 +820,7 @@ class PowerZone(GeneratorController):
                         callbackparameters=(
                             self.Reg.TOTAL_POWER_KW[REGISTER],
                             None,
-                            None,
+                            1000,       # Divider 1000?
                             False,
                             True,
                             False,
@@ -1134,6 +1134,7 @@ class PowerZone(GeneratorController):
                     MessageType = "warn"
                 msgbody += self.DisplayStatus()
                 status_included = True
+                msgbody += "\nIP Address: " + self.GetNetworkIp()
                 self.MessagePipe.SendMessage(msgsubject, msgbody, msgtype=MessageType)
 
             # Check for Alarms
@@ -1142,12 +1143,14 @@ class PowerZone(GeneratorController):
                     msgsubject = "Generator Notice: ALARM Active at " + self.SiteName
                     if not status_included:
                         msgbody += self.DisplayStatus()
+                    msgbody += "\nIP Address: " + self.GetNetworkIp()
                     self.MessagePipe.SendMessage(msgsubject, msgbody, msgtype="warn")
             else:
                 if self.CurrentAlarmState:
                     msgsubject = "Generator Notice: ALARM Clear at " + self.SiteName
                     if not status_included:
                         msgbody += self.DisplayStatus()
+                    msgbody += "\nIP Address: " + self.GetNetworkIp()
                     self.MessagePipe.SendMessage(msgsubject, msgbody, msgtype="warn")
 
             self.CurrentAlarmState = self.SystemInAlarm()
@@ -1213,7 +1216,7 @@ class PowerZone(GeneratorController):
         return False
 
     # ------------ PowerZone:UpdateRegisterList ---------------------------------
-    def UpdateRegisterList(self, Register, Value, IsString=False, IsFile=False):
+    def UpdateRegisterList(self, Register, Value, IsString=False, IsFile=False, IsCoil = False, IsInput = False):
 
         try:
             if len(Register) != 4:
@@ -1226,7 +1229,7 @@ class PowerZone(GeneratorController):
             if not IsFile and self.RegisterIsBaseRegister(
                 Register, Value, validate_length=True
             ):
-                self.Registers[Register] = Value
+                self.Holding[Register] = Value
             elif not IsFile and self.RegisterIsStringRegister(Register):
                 # TODO validate register string length
                 self.Strings[Register] = Value
@@ -1550,7 +1553,7 @@ class PowerZone(GeneratorController):
 
             if not NoTile:
 
-                StartInfo["buttons"] = {}
+                StartInfo["buttons"] = []
 
                 StartInfo["pages"] = {
                     "status": True,
@@ -2113,7 +2116,8 @@ class PowerZone(GeneratorController):
                 {
                     "Current Phase A": self.ValueOut(
                         self.GetParameter(
-                            self.Reg.GEN_PHASE_A_CURRENT[REGISTER], ReturnInt=True
+                            self.Reg.GEN_PHASE_A_CURRENT[REGISTER], ReturnFloat=True,
+                                Divider=10.0,
                         ),
                         "A",
                         JSONNum,
@@ -2124,7 +2128,8 @@ class PowerZone(GeneratorController):
                 {
                     "Current Phase B": self.ValueOut(
                         self.GetParameter(
-                            self.Reg.GEN_PHASE_B_CURRENT[REGISTER], ReturnInt=True
+                            self.Reg.GEN_PHASE_B_CURRENT[REGISTER], ReturnFloat=True,
+                                Divider=10.0,
                         ),
                         "A",
                         JSONNum,
@@ -2135,7 +2140,8 @@ class PowerZone(GeneratorController):
                 {
                     "Current Phase C": self.ValueOut(
                         self.GetParameter(
-                            self.Reg.GEN_PHASE_C_CURRENT[REGISTER], ReturnInt=True
+                            self.Reg.GEN_PHASE_C_CURRENT[REGISTER], ReturnFloat=True,
+                                Divider=10.0,
                         ),
                         "A",
                         JSONNum,
@@ -2146,7 +2152,8 @@ class PowerZone(GeneratorController):
                 {
                     "Average Current": self.ValueOut(
                         self.GetParameter(
-                            self.Reg.GEN_AVERAGE_CURRENT[REGISTER], ReturnInt=True
+                            self.Reg.GEN_AVERAGE_CURRENT[REGISTER], ReturnFloat=True,
+                                Divider=10.0,
                         ),
                         "A",
                         JSONNum,
@@ -2157,7 +2164,8 @@ class PowerZone(GeneratorController):
                 {
                     "Voltage A-B": self.ValueOut(
                         self.GetParameter(
-                            self.Reg.GEN_VOLT_PHASE_A_B[REGISTER], ReturnInt=True
+                            self.Reg.GEN_VOLT_PHASE_A_B[REGISTER], ReturnFloat=True,
+                                Divider=10.0,
                         ),
                         "V",
                         JSONNum,
@@ -2168,7 +2176,8 @@ class PowerZone(GeneratorController):
                 {
                     "Voltage B-C": self.ValueOut(
                         self.GetParameter(
-                            self.Reg.GEN_VOLT_PHASE_B_C[REGISTER], ReturnInt=True
+                            self.Reg.GEN_VOLT_PHASE_B_C[REGISTER], ReturnFloat=True,
+                                Divider=10.0,
                         ),
                         "V",
                         JSONNum,
@@ -2179,7 +2188,8 @@ class PowerZone(GeneratorController):
                 {
                     "Voltage C-A": self.ValueOut(
                         self.GetParameter(
-                            self.Reg.GEN_VOLT_PHASE_C_A[REGISTER], ReturnInt=True
+                            self.Reg.GEN_VOLT_PHASE_C_A[REGISTER], ReturnFloat=True,
+                                Divider=10.0,
                         ),
                         "V",
                         JSONNum,
@@ -2190,7 +2200,8 @@ class PowerZone(GeneratorController):
                 {
                     "Average Voltage": self.ValueOut(
                         self.GetParameter(
-                            self.Reg.GEN_AVERAGE_VOLTAGE_LL[REGISTER], ReturnInt=True
+                            self.Reg.GEN_AVERAGE_VOLTAGE_LL[REGISTER], ReturnFloat=True,
+                                Divider=10.0,
                         ),
                         "V",
                         JSONNum,
@@ -2795,11 +2806,11 @@ class PowerZone(GeneratorController):
 
             RegList = []
 
-            Regs["Num Regs"] = "%d" % len(self.Registers)
+            Regs["Num Regs"] = "%d" % len(self.Holding)
 
-            Regs["Base Registers"] = RegList
+            Regs["Holding"] = RegList
             # display all the registers
-            temp_regsiters = self.Registers
+            temp_regsiters = self.Holding
             for Register, Value in temp_regsiters.items():
                 RegList.append({Register: Value})
 
@@ -3076,11 +3087,11 @@ class PowerZone(GeneratorController):
             return self.GetPowerOutputAlt(ReturnFloat=ReturnFloat)
         if ReturnFloat:
             return self.GetParameter(
-                self.Reg.TOTAL_POWER_KW[REGISTER], ReturnFloat=True
+                self.Reg.TOTAL_POWER_KW[REGISTER], ReturnFloat=True, Divider = 1000
             )
         else:
             return self.GetParameter(
-                self.Reg.TOTAL_POWER_KW[REGISTER], "kW", ReturnFloat=False
+                self.Reg.TOTAL_POWER_KW[REGISTER], "kW", ReturnFloat=False,  Divider = 1000
             )
 
     # ------------ PowerZone:GetPowerOutputAlt ----------------------------------
@@ -3152,6 +3163,7 @@ class PowerZone(GeneratorController):
             #   "powerfactor" : float value (default is 1.0) used if converting from current to power or power to current
             #   ctdata[] : list of amps for each leg
             #   ctpower[] :  list of power in kW for each leg
+            #   voltagelegs[] : list of voltage legs
             #   voltage : optional, float value of total RMS voltage (all legs combined)
             #   phase : optional, int (1 or 3)
             # }

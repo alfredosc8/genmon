@@ -698,7 +698,7 @@ function DisplayMaintenance(){
     var url = baseurl.concat("maint_json");
     $.ajax({dataType: "json", url: url, timeout: 4000, error: processAjaxError, success: function(result){
         processAjaxSuccess();
-
+        useIdealFormsOnMaintPage = false;
         outstr = '<div style="clear:both" id="maintText">' + json2html(result, "", "root") + '</div>';
 
         if (myGenerator["write_access"] == true) {
@@ -778,19 +778,39 @@ function DisplayMaintenance(){
                outstr += '<br><br>Reset:<br><br>';
                outstr += '&nbsp;&nbsp;<button id="settimebutton" onClick="SetPowerLogReset();">Reset Power Log & Fuel Estimate</button>';
             }
-
-            if (("buttons" in myGenerator) && !(Object.keys(myGenerator['buttons']).length === 0) ){
-              outstr += '<br><br>Generator Functions:<br><br>';
-              for (let key in myGenerator['buttons']) {
-                button_command = key
-                button_title = myGenerator['buttons'][key];
-                outstr += '&nbsp;&nbsp;<button id=' + button_command + ' onClick="SetClick(\'' + button_command + '\');">' + button_title + '</button><br><br>';
+            try{
+              if (("buttons" in myGenerator) && !(myGenerator['buttons'].length === 0)) {
+                outstr += '<br><br>Generator Functions:<br><br>';
+                for (let index in myGenerator['buttons']) {
+                  button = myGenerator['buttons'][index];
+                  button_command = button["onewordcommand"];
+                  button_title = button["title"];
+                  command_sequence = button["command_sequence"];
+                  
+                  if ((command_sequence.length >= 1) && (command_sequence[0].hasOwnProperty("input_title"))){
+                    // this button has an input
+                    outstr += setupCommandButton(button);
+                    useIdealFormsOnMaintPage = true;
+                  } else {
+                    // This is just a button, no input from the user.
+                    outstr += '&nbsp;&nbsp;<button id=' + button_command + ' onClick="SetClick(\'' + button_command + '\');">' + button_title + '</button><br><br>';
+                  }
+                }
               }
+            } catch(err){
+              console.log("Error parsing buttons: " + err)
             }
-
+            
         }
-
             $("#mydisplay").html(outstr);
+            if (useIdealFormsOnMaintPage){
+              // if we had any buttons using tooltips then do this
+              $('form.idealforms').idealforms({
+                tooltip: '.tooltip',
+                silentLoad: true,
+              });
+
+            }
 
         if (myGenerator["write_access"] == true) {
 
@@ -806,6 +826,438 @@ function DisplayMaintenance(){
         }
 
    }});
+}
+
+//*****************************************************************************
+// called to setup button for a command_sequence
+//*****************************************************************************
+function setupCommandButton(button){
+  try{
+    var outstr = "";
+    var button_command = button["onewordcommand"];
+    var button_title = button["title"];
+    var command_sequence = button["command_sequence"];
+    var button_id = 'button_' + button_command;
+    var clickCallback = "onCommandButtonClick(\'" + button_command + "\')";
+
+    
+    outstr += '<form class="idealforms" novalidate  autocomplete="off" id="formButtons">';
+    outstr += '<table>';
+    
+    // loop thru the list of commands in command_sequence
+    for (let cmdidx in command_sequence){
+      // cycle through each command in command_sequence
+      outstr += '<tr>'
+      
+      if (cmdidx == 0){
+        outstr += '<td>';
+        outstr += '&nbsp;&nbsp;';
+        // NOTE: type="button" is required or the ideal forms code will crash
+        outstr += '<button class="button" type="button" id="' + button_id + '" style="background:#bbbbbb;color:#000000;float:none" onclick="' + clickCallback + ';" > ' + button_title + '</button>';
+        outstr += '</td>';
+      }
+      else{
+        outstr += '<td></td>';  // empty table cell
+      }
+      outstr += '<td>';
+      // div for ideamfrom must go in table data element
+      outstr += '<div class="field idealforms-field idesforms-text-field style="clear:both">';
+      command = command_sequence[cmdidx]
+      if ((command.hasOwnProperty("input_title")) && (command.hasOwnProperty("type"))) {
+        title = command["input_title"];
+        type = command["type"];
+        tooltip = ""
+        bounds = ""
+        if (command.hasOwnProperty("bounds_regex")){
+          bounds = command["bounds_regex"];
+        }
+        if (command.hasOwnProperty("tooltip")){
+          tooltip = command["tooltip"];
+        }
+        var default_value = 0;
+        outstr += setupInputBoxForButton(cmdidx, button_command, type, title, default_value, tooltip, bounds );
+      }
+      else{
+        console.log("Error: button command_sequence does not have both 'input_title' and 'type'.");
+      }
+      outstr += '</div>';
+      outstr += '</td>';
+      outstr += '</tr>'
+    }
+
+    // if we added a control then go to the next line
+    outstr += '</table>';
+    outstr += '</form>'
+    outstr += '<br>';
+    
+    return outstr;
+  }
+  catch(err){
+    console.log("Error in setupCommandButton: " + err);
+    return "";
+  }
+}
+//*****************************************************************************
+// called to setup input button
+//*****************************************************************************
+function setupInputBoxForButton(identifier, parent, type, title, default_value, tooltip, bounds_regex ) {
+
+  var outstr = ""
+  try {
+
+    if (!(type === "int")){
+      // at the moment only "int" is supported
+      console.log("Error in setupInputBoxForButton: only type 'int' supported at the moment.")
+      return outstr;
+    }
+    var id = parent + "_" + identifier
+    var input_id = "input_"+ id;
+    // used for forms
+    var changeCallback = "validateInputButton(\'change\', \'" + identifier + "\', \'" + parent + "\', \'" + bounds_regex + "\')";
+    var rulename = input_id + '_rule'
+    var validation = rulename;
+
+    outstr += '&nbsp;&nbsp;';
+    outstr += '<input id="' + input_id +  '" style="width: 150px;clear:both;float:none" autocomplete="off" name="' + input_id + '" type="text" ';
+    outstr += ' onChange="' + changeCallback + ';" ';
+    outstr += (((typeof validation === 'undefined') || (validation==0)) ? 'onFocus="$(\'#'+input_id+'_tooltip\').show();" onBlur="$(\'#'+input_id+'_tooltip\').hide();" ' : 'data-idealforms-rules="' + validation + '" ') ;
+
+    outstr += '>';  // end input box
+    outstr += '&nbsp; ' + title;
+
+    outstr += '<span class="error" style="display: none;"></span>';
+    outstr += (((typeof tooltip !== 'undefined' ) && (tooltip.trim() != "")) ? '<span id="' + input_id + '_tooltip" class="tooltip" style="display: none;">' + replaceAll(tooltip, '"', '&quot;') + '</span>' : "");
+
+    //add the regex as a rule for idealforms
+    $.extend($.idealforms.rules, {
+      [rulename]:  function(input, value, arg1, arg2) {
+        var regex = RegExp(bounds_regex, 'g');
+        return regex.test(value);
+      }
+    });
+    $.extend($.idealforms.errors, {
+      [rulename]: tooltip
+    });
+
+    outstr += '<br>';
+    return outstr;
+  }
+  catch(err) {
+    console.log("Error in setupInputBoxForButton: " + err);
+  }
+  return outstr;
+}
+
+//*****************************************************************************
+// given a button one word command, retrieve the containing button object
+//*****************************************************************************
+function getButtonFromCommand(onewordcommand){
+
+    if (("buttons" in myGenerator) && !(myGenerator['buttons'].length === 0)) {
+      // cycle thru the buttons in our list
+      for (let index in myGenerator['buttons']) {
+        button = myGenerator['buttons'][index];
+        button_command = button["onewordcommand"];
+        if (onewordcommand == button_command){
+          return button;
+        }
+      }
+    }
+    // did not find the button requested
+    console.log("Error in getButtonCommand: button not found: " + onewordcommand)
+    return null;
+}
+//*****************************************************************************
+// called when sending button input to genmon
+//*****************************************************************************
+function sendButtonCommand(button_object)
+{
+  try{
+      if ((!(button_object.hasOwnProperty("onewordcommand"))) || 
+          (!(button_object.hasOwnProperty("title"))) ||
+          (!(button_object.hasOwnProperty("command_sequence"))))
+      {
+        console.log("Error: invalid  of button object.");
+        return false;
+      }
+      // set button command
+      // the button_object is one of the button elemnts in the list
+      // the input to set_button_command is a list of button objects
+      // only send the buttons in the list that you want to the commands
+      // to be sent.
+      // myGenerator['buttons'] list with the 'value' property added 
+      // to the command_sequence, 
+      // e.g. myGenerator['buttons'][0]['command_sequence][0]['value'] = user defined input
+      var error_occured = false;
+      var input =  JSON.stringify([button_object]);
+      var url = baseurl.concat("set_button_command");
+      $.getJSON(  url,
+                  {set_button_command: input},
+                  function(result){
+          // result should be either "OK" or error string.
+          if (result !== "OK"){
+            console.log("Error: failure sending set_button_command: " + result);
+            error_occured = true;
+            return false;
+          }
+      });
+      return (error_occured == false);
+  }
+  catch (err){
+    console.log("Error in setButonCommand: " + err);
+    return false;
+  }
+}
+
+//*****************************************************************************
+//
+//*****************************************************************************
+function onCommandButtonClick(onewordcommand){
+
+    try{
+      
+      var button = getButtonFromCommand(onewordcommand);
+      if (button == null){
+        console.log("Error in onCommandButtonClick: button object not found.");
+        return false;
+      }
+      var button_title = button["title"];
+
+      if (!validateButtonCommand(onewordcommand)){
+        return false;
+      }
+
+      
+      DisplayStrAnswer = false;
+      msg = 'Issue generator command: ' + button_title + '?<br><span class="confirmSmall">Are you sure you want to isssue this command?</span>';
+
+      var DisplayStrButtons = {
+        NO: {
+          text: 'Cancel',
+          type: 'button',
+          className: 'vex-dialog-button-secondary',
+          click: function noClick () {
+            DisplayStrAnswer = false
+            this.close()
+          }
+        },
+        YES: {
+          text: 'OK',
+          type: 'submit',
+          className: 'vex-dialog-button-primary',
+          click: function yesClick () {
+            DisplayStrAnswer = true
+          }
+        }
+    }
+      
+    vex.dialog.open({
+      unsafeMessage: msg,
+      overlayClosesOnClick: false,
+      buttons: [
+        DisplayStrButtons.YES,
+        DisplayStrButtons.NO
+      ],
+      onSubmit: function(e) {
+        if (DisplayStrAnswer) {
+          DisplayStrAnswer = false; // Prevent recursive calls.
+          e.preventDefault();
+          issueButtonCommand(onewordcommand);
+          var DisplayStr1 = 'Sending Command '+button_title +'...';
+          var DisplayStr2 = '<div class="progress-bar"><span class="progress-bar-fill" style="width: 0%"></span></div>';
+          $('.vex-dialog-message').html(DisplayStr1);
+          $('.vex-dialog-buttons').html(DisplayStr2);
+          $('.progress-bar-fill').queue(function () {
+                $(this).css('width', '100%')
+          });
+          setTimeout(function(){
+              vex.closeAll();
+              //gotoLogin();
+          }, 5000);
+          }
+        }
+      });
+      return true;
+    }
+
+    catch(err){
+      console.log("Error in onCommandButton: " + err);
+      return false;
+    }
+}
+//*****************************************************************************
+//
+//*****************************************************************************
+function validateButtonCommand(onewordcommand){
+  try{
+    // here we want to loop thru the command_sequence arrary, getting the 
+    // data for each input box it corrosponds to, validate the data with the
+    // bounds_regex parameter, if it exists. 
+    var button = getButtonFromCommand(onewordcommand);
+    if (button == null){
+      console.log("Error in validateButtonCommand: button object not found.");
+      return false;
+    }
+    var button_title = button["title"];
+    var command_sequence = button["command_sequence"];
+    // loop thru the list of commands in command_sequence
+    for (let cmdidx in command_sequence){
+      // cycle through each command in command_sequence
+      command = command_sequence[cmdidx];
+      if ((command.hasOwnProperty("input_title")) && (command.hasOwnProperty("type"))) {
+        title = command["input_title"];
+        bounds = ""
+        if (command.hasOwnProperty("bounds_regex")){
+          bounds = command["bounds_regex"];
+        }
+        var input_id = "input_"+ onewordcommand + "_" + cmdidx;
+        var value = document.getElementById(input_id).value;
+        if (!(validateRegEx(value, bounds, dialog_on_error = true))){
+          return false;
+        }
+      }
+      else{
+        console.log("Error in validateButtonCommand: button command_sequence does not have both 'input'title' and 'type': " + button_title);
+        return false;
+      }
+    }
+    return true;
+  }
+  catch(err){
+    console.log("Error in validateButtonCommand: " + err);
+      return false;
+  }
+}
+//*****************************************************************************
+//
+//*****************************************************************************
+function issueButtonCommand(onewordcommand){
+  try{
+      // here we want to loop thru the command_sequence arrary, getting the 
+      // data for each input box it corrosponds to, then write the value to the entry in 
+      // the command_sequence and send the entire command_button object to genmon.
+      var original_button = getButtonFromCommand(onewordcommand);
+      if (original_button == null){
+        console.log("Error in issueButtonCommand: button object not found.");
+        return false;
+      }
+      let button = { ...original_button };    // clone the button object
+      var button_title = button["title"];
+      var command_sequence = button["command_sequence"];
+      // loop thru the list of commands in command_sequence
+      for (let cmdidx in command_sequence){
+        // cycle through each command in command_sequence
+        command = command_sequence[cmdidx];
+        if ((command.hasOwnProperty("input_title")) && (command.hasOwnProperty("type"))) {
+          title = command["input_title"];
+          type = command["type"];
+
+          var input_id = "input_"+ onewordcommand + "_" + cmdidx;
+          var value = document.getElementById(input_id).value;
+          if (type == "int"){
+            // write the value to the object
+            command['value'] = parseInt(value);
+          }
+          else {
+            console.log("Error: unsupported type in issueButtonCommand: " + type + ", " + button_title);
+            return false;
+          }
+        }
+        else{
+          console.log("Error in issueButtonCommand: button command_sequence does not have both 'input'title' and 'type': " + button_title);
+          return false;
+        }
+      }
+      // now send the button to genmon for writing 
+      // for now we only send one button at a time. 
+      sendButtonCommand(button);
+  }
+  catch(err){
+      console.log("Error in issueButtonCommand: " + err);
+      return false;
+  }
+}
+//*****************************************************************************
+// called when validating input button
+// action is "validate", "click" or "change"
+//  click - validate and send data
+//  validate - check data and send mesage to user on invalid data
+//  change - check the data, return true if data OK, otherwise false
+// identifier is the index of the command_sequence in a given button object
+// parent is the 'onewordcommand' of the parent
+// bounds_regex is the regular expession string to bounds check the input 
+//*****************************************************************************
+function validateInputButton(action, identifier, parent, bounds_regex){
+
+    //console.log("Input Validation called: " + action + ", " + identifier + ", " + parent)
+
+    try{
+      // TODO this only does one input now. need to read (and validate) all inputs 
+      // and fill them into the command_sequence then send them to genmon
+      // the function parameter bounds_regex should be changed as this will come from the 
+      // button_object.command_sequence array entries 
+      var button_object = getButtonFromCommand(parent);
+      if (button_object == null){
+        console.log("Error in validateInputButton: button object not found.");
+        return false;
+      }
+      var button_title = button_object['title'];
+      // get the input value for the corrosponding button
+      var id = parent + "_" + identifier
+      var input_id = "input_"+ id;
+      var value = document.getElementById(input_id).value
+      
+      switch (action) {
+        case "validate":
+        case "change":
+          return validateRegEx(value, bounds_regex, dialog_on_error = (action === "validate"));
+        case "click":
+          if (!(validateInputButton("validate", identifier, parent, bounds_regex))){
+            return false;
+          }
+          // send data to genmon
+          return true;
+        default:
+          console.log("Error: Invalid action in validateInputButton!");
+          return false;
+      }
+    }
+    catch(err){
+      console.log("Error in validateInputButton: " + err);
+      return false;
+    }
+    return false;
+}
+//*****************************************************************************
+// validate a value with a regex string, return true or false
+//*****************************************************************************
+function validateRegEx(value, bounds_regex, dialog_on_error = true){
+  try{
+    var bounds = new RegExp(bounds_regex);
+    if (!(bounds.test(value))){
+      if (dialog_on_error){
+        GenmonAlert("The input is invalid for this parameter.");
+      }
+      return false;
+    }
+    return true;
+  }
+  catch(err){
+    console.log("Error in validateRegEx: " + bounds_regex + ": " + err);
+    return false;
+  }
+}
+//*****************************************************************************
+// submit for button commands
+//*****************************************************************************
+function submitButton(ctlid, identifier, parent){
+  try{
+    console.log("ID:" + ctlid + ", Index: " + identifier+ ", Parent: " + parent )
+    //console.log("value: " + document.getElementById(ctlid).value)
+  }
+  catch(err){
+    console.log("Error in submitButton: " + err)
+  }
 }
 
 //*****************************************************************************
@@ -876,7 +1328,12 @@ function SetClick(cmd){
           msg = 'Acknowledge generator alarm?<br><span class="confirmSmall">Are you sure you want to acknowledge the alarm condition on your generator?</span>';
           break;
        default:
-          button_title = myGenerator['buttons'][cmd]
+          button = getButtonFromCommand(cmd);
+          if (button == null){
+            console.log("Error in SetClick: button object not found.");
+            return;
+          }
+          button_title = button['title']
           msg = 'Issue generator command: ' + button_title + '?<br><span class="confirmSmall">Are you sure you want to isssue this command?</span>';
     }
 
@@ -1096,64 +1553,105 @@ function saveMaintenance(){
 }
 
 //*****************************************************************************
-// Display the Logs Tab
+// Display Logs
 //*****************************************************************************
 function DisplayLogs(){
 
-    var url = baseurl.concat("logs");
+    var url = baseurl.concat("logs_json");
     $.ajax({dataType: "json", url: url, timeout: 4000, error: processAjaxError, success: function(result) {
         processAjaxSuccess();
-
-        var outstr = '<center><div id="annualCalendar"></div></center>';
-        outstr += replaceAll(replaceAll(result,'\n','<br/>'),' ','&nbsp');  // replace space with html friendly &nbsp
-
-        $("#mydisplay").html(outstr);
-
-        if (lowbandwidth == false) {
+        try{
+            var LogData = result;
+            var outstr = '<center><div id="annualCalendar"></div></center>';
+            outstr += json2html(result, "", "root");
+            $("#mydisplay").html(outstr);
+            if (!(lowbandwidth == false)){
+              // don't display heat map
+              return
+            }
+        }
+        catch(err){
+          console.log("Error in DisplayLogs (log display):" + err)
+          return 
+        }
+        // check myGenerator[“AltDateformat”] == true to change date format from mm/dd/yyyy to dd/mm/yyyy
+        // so heat map can parse the data correctly
+        try{
+          var severity = 0;
+          var months = 1;
           var date = new Date();
           var data_helper = {};
-          var months = 1;
-          var loglines = result.split('\n');
-          var severity = 0;
-          for(var i = 0;i < loglines.length;i++){
-            if (loglines[i].indexOf("Alarm Log :") >= 0) {
-               severity = 3;
-            } else if (loglines[i].indexOf("Service Log :") >= 0) {
-               severity = 2;
-            } else if (loglines[i].indexOf("Run Log :") >= 0) {
-               severity = 1;
-            } else {
-               var matches = loglines[i].match(/^\s*(\d+)\/(\d+)\/(\d+) (\d+:\d+:\d+) (.*)$/i)
-               if ((matches != undefined) && (matches.length == 6)) {
-                  if ((12*matches[3]+1*matches[1]+12) <= (12*(date.getYear()-100) + date.getMonth() + 1)) {
-                  } else if (data_helper[matches[3]+'/'+matches[1]+'/'+matches[2]] == undefined) {
-                      data_helper[matches[3]+'/'+matches[1]+'/'+matches[2]] = {count: severity, date: '20'+matches[3]+'-'+matches[1]+'-'+matches[2], dateFormatted: matches[2]+' '+MonthsOfYearArray[(matches[1] -1)]+' 20'+matches[3], title: matches[5].trim()};
-                      if (((12*(date.getYear()-100) + date.getMonth() + 1)-(12*matches[3]+1*matches[1])+1) > months) {
-                          months = (12*(date.getYear()-100) + date.getMonth() + 1)-(12*matches[3]+1*matches[1])+1
-                      }
-                  } else {
-                      data_helper[matches[3]+'/'+matches[1]+'/'+matches[2]]["title"] = data_helper[matches[3]+'/'+matches[1]+'/'+matches[2]]["title"] + "<br>" + matches[5].trim();
-                      if (data_helper[matches[3]+'/'+matches[1]+'/'+matches[2]]["count"] < severity)
-                         data_helper[matches[3]+'/'+matches[1]+'/'+matches[2]]["count"] = severity;
-                  }
-               }
-            }
+          for (const [logname, logarray] of Object.entries(LogData["Logs"])) {
+            //console.log(`${logname}: `);
+            if (logname.toLowerCase().includes("alarm")){  // ALARM log
+              severity = 3;
+            } else if(logname.toLocaleLowerCase().includes("service")){ // service log
+              severity = 2;
+            } else if(logname.toLocaleLowerCase().includes("run")){   // run log
+              severity = 1;
+            };
+              
+            for (entry of logarray) {
+              //console.log(entry);
+              var matches = entry.match(/^\s*(\d+)\/(\d+)\/(\d+) (\d+:\d+:\d+) (.*)$/i);
+              if ((matches == undefined) || (matches.length != 6)) {
+                continue;
+              }
+              // e.g. matches =  ["07/17/23 08:58:25 Switched Off", "07", "17", "23", "08:58:25", "Switched Off"]
 
-          }
+              var MM;
+              var DD; 
+              var YY;
+              if (myGenerator["AltDateformat"] == true){
+                // DD/MM/YYYY
+                MM = matches[2]
+                DD = matches[1]
+                YY = matches[3]
+              }
+              else{
+                // MM/DD/YYYY
+                MM = matches[1]
+                DD = matches[2]
+                YY = matches[3]
+              };
+              var logtext = matches[5].trim()
+              var entrydate = YY + '/' + MM + '/' + DD;
+              if ((12 * YY + 1 * MM + 12) <= (12*(date.getYear()-100) + date.getMonth() + 1)) {
+                // date before our cutoff
+                continue;
+              } 
+              if(data_helper[entrydate] == undefined){
+                // no entry for this date yet so add one
+                MonthIndex = parseInt(MM) - 1
+                formatteddate = DD+' ' + MonthsOfYearArray[MonthIndex] + ' 20'+YY
+                data_helper[entrydate] = {count: severity, date: '20'+YY+'-'+MM+'-'+DD, dateFormatted: formatteddate, title: logtext};
+                if (((12*(date.getYear()-100) + date.getMonth() + 1)-(12 * YY + 1 * MM) + 1) > months) {
+                  months = (12 * (date.getYear()-100) + date.getMonth() + 1) - (12 * YY + 1 * MM) + 1;
+                }
+              }
+              else{
+                // already an entry for this date
+                data_helper[entrydate]["title"] = data_helper[entrydate]["title"] + "<br>" + logtext;
+                if (data_helper[entrydate]["count"] < severity)
+                   data_helper[entrydate]["count"] = severity;
+              }
+            };
+          };
+
           var data = Object.keys(data_helper).sort().map(function(itm) { return data_helper[itm]; });
-          // var data = Object.keys(data_helper).map(itm => data_helper[itm]);
-          // var data = Object.values(data_helper);
-          // console.log(data);
           var options = {coloring: 'genmon',
                          start: new Date((date.getMonth()-12 < 0) ? date.getYear() - 1 + 1900 : date.getYear() + 1900, (date.getMonth()-12 < 0) ? date.getMonth()+1 : date.getMonth()-12, 1),
                          end: new Date(date.getYear() + 1900, date.getMonth(), date.getDate()) ,
                          months: months, lastMonth: date.getMonth()+1, lastYear: date.getYear() + 1900,
                          labels: { days: true, months: true, custom: {monthLabels: "MMM 'YY"}}, tooltips: { show: true, options: {}}, legend: { show: false}};
           $("#annualCalendar").CalendarHeatmap(data, options);
+        }  // end try
+        catch(err){
+          console.log("Error in DisplayLogs (heatmap display):" + err)
+          return
         }
-   }});
+      }});
 }
-
 //*****************************************************************************
 // Display the Monitor Tab
 //*****************************************************************************
@@ -1354,7 +1852,9 @@ function saveNotifications(){
              DisplayStrAnswer = false; // Prevent recursive calls.
              e.preventDefault();
              saveNotificationsJSON();
+             var DisplayStr1 = 'Saving...';
              var DisplayStr2 = '<div class="progress-bar"><span class="progress-bar-fill" style="width: 0%"></span></div>';
+             $('.vex-dialog-message').html(DisplayStr1);
              $('.vex-dialog-buttons').html(DisplayStr2);
              $('.progress-bar-fill').queue(function () {
                   $(this).css('width', '100%')
@@ -1555,7 +2055,10 @@ function saveJournals(rowtype, rowcount){
              $('.progress-bar-fill').queue(function () {
                   $(this).css('width', '100%')
              });
-             setTimeout(function(){ vex.closeAll();}, 2000);
+             setTimeout(function(){ 
+              vex.closeAll();
+              gotoRoot();
+            }, 2000); 
            }
         }
     })
@@ -1882,19 +2385,20 @@ function DisplaySettings(){
         $.extend($.idealforms.rules, {
            // The rule is added as "ruleFunction:arg1:arg2"
            HTTPAddress: function(input, value, arg1, arg2) {
-             var regex = RegExp("^http[s]?:\\/\\/(([a-z0-9]+([\-\\.]{1}[a-z0-9]+)*\\.[a-z]{2,5}(\/.*)?)|(localhost(\/.*)?))$", 'g');
+             //var regex = RegExp("^http[s]?:\\/\\/(([a-z0-9]+([-\\.]{1}[a-z0-9]+)*\\.[a-z]{2,5}(\/.*)?)|(localhost(\/.*)?))$", 'g');
+             var regex = RegExp("^(?:https?:\/\/)(?!$)(?:www\.)?[a-zA-Z]*(?:\.[a-zA-Z]{2,6})?(?:(?:\d{1,3}\.){3}\d{1,3})?", 'g');
              return regex.test(value);
            },
            InternetAddress: function(input, value, arg1, arg2) {
-             var regex = RegExp("^((([a-z0-9]+([\-\\.]{1}[a-z0-9]+)*\\.[a-z]{2,5}(\/.*)?)|(localhost(\/.*)?))|((25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)\.(25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)\.(25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)\.(25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)(\/.*)?))$", 'g');
+             var regex = RegExp("^((([a-z0-9]+([-\\.]{1}[a-z0-9]+)*\\.[a-z]{2,5}(\/.*)?)|(localhost(\/.*)?))|((25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?).(25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?).(25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?).(25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)(\/.*)?))$", 'g');
              return regex.test(value);
            },
            IPAddress: function(input, value, arg1, arg2) {
-             var regex = RegExp("^(((25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)\.(25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)\.(25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)\.(25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)(\/.*)?)|(localhost(\/.*)?))$", 'g');
+             var regex = RegExp("^(((25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?).(25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?).(25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?).(25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)(\/.*)?)|(localhost(\/.*)?))$", 'g');
              return regex.test(value);
            },
            InternationalPhone: function(input, value, arg1, arg2) {
-             var regex = RegExp('^(\\+(\\d{1,3}))?((\\(\\d{1,4}\\))|(\\d{1,3}))?(\\s|\-)?(\\d+(\\s?|\-?))+$', 'g');
+             var regex = RegExp('^[0-9\-().+\s]{10,20}$', 'g');
              return regex.test(value);
            },
            UnixFile: function(input, value, arg1, arg2) {
@@ -2265,19 +2769,20 @@ function DisplayAddons(){
         $.extend($.idealforms.rules, {
            // The rule is added as "ruleFunction:arg1:arg2"
            HTTPAddress: function(input, value, arg1, arg2) {
-             var regex = RegExp("^http[s]?:\\/\\/(([a-z0-9]+([\-\\.]{1}[a-z0-9]+)*\\.[a-z]{2,5}(\/.*)?)|(localhost(\/.*)?))$", 'g');
+             //var regex = RegExp("^http[s]?:\\/\\/(([a-z0-9]+([-\\.]{1}[a-z0-9]+)*\\.[a-z]{2,5}(\/.*)?)|(localhost(\/.*)?))$", 'g');
+             var regex = RegExp("^(?:https?:\/\/)(?!$)(?:www\.)?[a-zA-Z]*(?:\.[a-zA-Z]{2,6})?(?:(?:\d{1,3}\.){3}\d{1,3})?", 'g');
              return regex.test(value);
            },
            InternetAddress: function(input, value, arg1, arg2) {
-             var regex = RegExp("^(([a-z0-9]+([\-\\.]{1}[a-z0-9]+)*\\.[a-z]{2,5}(\/.*)?)|(localhost(\/.*)?))$", 'g');
+             var regex = RegExp("^(([a-z0-9]+([-\\.]{1}[a-z0-9]+)*\\.[a-z]{2,5}(\/.*)?)|(localhost(\/.*)?))$", 'g');
              return regex.test(value);
            },
            IPAddress: function(input, value, arg1, arg2) {
-             var regex = RegExp("^(((25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)\.(25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)\.(25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)\.(25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)(\/.*)?)|(localhost(\/.*)?))$", 'g');
+             var regex = RegExp("^(((25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?).(25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?).(25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?).(25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)(\/.*)?)|(localhost(\/.*)?))$", 'g');
              return regex.test(value);
            },
            InternationalPhone: function(input, value, arg1, arg2) {
-             var regex = RegExp('^(\\+(\\d{1,3}))?((\\(\\d{1,4}\\))|(\\d{1,3}))?(\\s|\-)?(\\d+(\\s?|\-?))+$', 'g');
+             var regex = RegExp('^[0-9\-().+\s]{10,20}$', 'g');
              return regex.test(value);
            },
            UnixFile: function(input, value, arg1, arg2) {
@@ -2422,6 +2927,12 @@ function httpsUsed() {
     return url.includes("https:")
 }
 
+//*****************************************************************************
+function gotoRoot() {
+
+  var url = window.location.href.split("/")[0].split("?")[0];
+  window.location.href = url;
+}
 //*****************************************************************************
 function gotoLogin() {
 
@@ -2775,29 +3286,40 @@ function DisplayRegistersFull()
     var outstr = 'Live Register View:<br><br>';
     outstr += '<center><table width="80%" border="0"><tr>';
 
-    $.each(Object.keys(regHistory["updateTime"]).sort(), function(i, reg_key) {
-        if ((i % 4) == 0){
-        outstr += '</tr><tr>';
-        }
-
-        var reg_val = regHistory["_10m"][reg_key][0];
-
-        outstr += '<td width="25%" class="registerTD">';
-        outstr +=     '<table width="100%" heigth="100%" id="val_'+reg_key+'">';
-        outstr +=     '<tr><td align="center" class="registerTDtitle">' + BaseRegistersDescription[reg_key] + '</td></tr>';
-        outstr +=     '<tr><td align="center" class="registerTDsubtitle">(' + reg_key + ')</td></tr>';
-        outstr +=     '<tr><td align="center" class="tooltip registerChart" id="content_'+reg_key+'">';
-        outstr +=        ((reg_key == "01f4") ? '<span class="registerTDvalMedium">HEX:<br>' + reg_val + '</span>' : 'HEX: '+reg_val) + '<br>';
-        outstr +=        ((reg_key == "01f4") ? '' : '<span class="registerTDvalSmall">DEC: ' + parseInt(reg_val, 16) + ' | HI:LO: '+parseInt(reg_val.substring(0,2), 16)+':'+parseInt(reg_val.substring(2,4), 16)+'</span>');
-        outstr +=     '</td></tr>';
-        outstr +=     '</table>';
-        outstr += '</td>';
-    });
-    if ((regHistory["_10m"].length % 4) > 0) {
-      for (var i = (regHistory["_10m"].length % 4); i < 4; i++) {
-         outstr += '<td width="25%" class="registerTD"></td>';
+    var RegTypes = ['Holding', 'Inputs', 'Coils'];
+    $.each(RegTypes, function(i, reg_type){
+      if (!(regHistory["_10m"].hasOwnProperty(reg_type))){
+        // no data for this register
+        return;
       }
-    }
+      $.each(Object.keys(regHistory["updateTime"][reg_type]).sort(), function(i, reg_key) {
+          if ((i % 4) == 0){
+          outstr += '</tr><tr>';
+          }
+
+          var reg_val = regHistory["_10m"][reg_type][reg_key][0];
+
+          outstr += '<td width="25%" class="registerTD">';
+          outstr +=     '<table width="100%" heigth="100%" id="val_'+reg_type+'_'+reg_key+'">';
+          outstr +=     '<tr><td align="center" class="registerTDtitle">' + BaseRegistersDescription[reg_type][reg_key] + '</td></tr>';
+          outstr +=     '<tr><td align="center" class="registerTDsubtitle">(' + reg_type+':'+reg_key + ')</td></tr>';
+          outstr +=     '<tr><td align="center" class="tooltip registerChart" id="content_'+reg_type+'_'+reg_key+'">';
+          outstr +=        ((reg_key == "01f4") ? '<span class="registerTDvalMedium">HEX:<br>' + reg_val + '</span>' : 'HEX: '+reg_val) + '<br>';
+          // This handles the case for byte data returning Not a Number (NaN) for coil registers
+          var strHi = ((parseInt(reg_val) & 0xff00) >> 8).toString()
+          var strLo = (parseInt(reg_val) & 0x00ff).toString()
+          outstr +=        ((reg_key == "01f4") ? '' : '<span class="registerTDvalSmall">DEC: ' + parseInt(reg_val, 16) + ' | HI:LO: '+strHi +':'+ strLo +'</span>');
+          outstr +=     '</td></tr>';
+          outstr +=     '</table>';
+          outstr += '</td>';
+      });
+    
+      if ((regHistory["_10m"][reg_type].length % 4) > 0) {
+        for (var i = (regHistory["_10m"][reg_type].length % 4); i < 4; i++) {
+          outstr += '<td width="25%" class="registerTD"></td>';
+        }
+      }
+    });
     outstr += '</tr></table>';
     outstr += '<br><img id="print10" class="print10 printButton" onClick="printRegisters(10)" src="images/transparent.png" width="36px" height="36px">&nbsp;&nbsp;&nbsp;';
     outstr += '<img id="print60" class="print60 printButton" onClick="printRegisters(60)" src="images/transparent.png" width="36px" height="36px">&nbsp;&nbsp;&nbsp;';
@@ -2821,6 +3343,8 @@ function DisplayRegistersFull()
         side: ['top', 'left'],
         functionReady: function(instance, helper) {
             var regId = $(helper.origin).attr('id').replace(/content_/g, '');
+            var reg_type = regId.split('_')[0]
+            var reg_key = regId.split('_')[1]
             instance.content('<div class="regHistoryCanvas"><table><tr><td class="regHistoryCanvasTop">' +
                              '  <div id="'+regId+'_graph1" class="regHistoryPlot"></div>' +
                              '  <div id="'+regId+'_graph2" class="regHistoryPlot"></div>' +
@@ -2834,12 +3358,12 @@ function DisplayRegistersFull()
             var plot_data2 = [];
             var plot_data3 = [];
             for (var i = 120; i >= 0; --i) {
-               if (regHistory["_10m"][regId].length > i)
-                   plot_data1.push([-i/12, parseInt(regHistory["_10m"][regId][i], 16)]);
-               if (regHistory["_60m"][regId].length > i)
-                   plot_data2.push([-i/2, parseInt(regHistory["_60m"][regId][i], 16)]);
-               if (regHistory["_24h"][regId].length > i)
-                   plot_data3.push([-i/5, parseInt(regHistory["_24h"][regId][i], 16)]);
+               if (regHistory["_10m"][reg_type][reg_key].length > i)
+                   plot_data1.push([-i/12, parseInt(regHistory["_10m"][reg_type][reg_key][i], 16)]);
+               if (regHistory["_60m"][reg_type][reg_key].length > i)
+                   plot_data2.push([-i/2, parseInt(regHistory["_60m"][reg_type][reg_key][i], 16)]);
+               if (regHistory["_24h"][reg_type][reg_key].length > i)
+                   plot_data3.push([-i/5, parseInt(regHistory["_24h"][reg_type][reg_key][i], 16)]);
             }
             var plot1 = $.jqplot(regId+'_graph1', [plot_data1], {
                                axesDefaults: { tickOptions: { textColor: '#999999', fontSize: '8pt' }},
@@ -2876,61 +3400,92 @@ function UpdateRegisters(init, printToScreen)
         processAjaxSuccess();
 
         try{
-            $.each(RegData.Registers["Base Registers"], function(i, item) {
-                var reg_key = Object.keys(item)[0]
-                var reg_val = item[Object.keys(item)[0]];
+            var localRegData = null;
+            var RegTypes = ['Holding', 'Inputs','Coils'];
+            $.each(RegTypes, function(i, reg_type){
+              
+              if (!(RegData.Registers.hasOwnProperty(reg_type))){
+                // no data for this register
+                return;
+              }
+              if (Object.keys(RegData.Registers[reg_type]).length < 1){
+                // no data for this register
+                return
+              }
+              localRegData = RegData.Registers[reg_type]
+            
+              if (localRegData == null){
+                return
+              }
+              $.each(localRegData, function(i, item) {
+                  var reg_key = Object.keys(item)[0]
+                  var reg_val = item[Object.keys(item)[0]];
 
-                if ((init) || (regHistory["_10m"][reg_key] == undefined)) {
-                    regHistory["updateTime"][reg_key] = 0;
-                    regHistory["_10m"][reg_key] = [reg_val];
-                    regHistory["_60m"][reg_key] = [reg_val, reg_val];
-                    regHistory["_24h"][reg_key] = [reg_val, reg_val];
-                } else {
-                   if (reg_val != regHistory["_10m"][reg_key][0]) {
-                      regHistory["updateTime"][reg_key] = new Date().getTime();
-
-                      if (printToScreen) {
-                        var outstr  = ((reg_key == "01f4") ? '<span class="registerTDvalMedium">HEX:<br>' + reg_val + '</span>' : 'HEX: '+reg_val) + '<br>';
-                            outstr += ((reg_key == "01f4") ? '' : '<span class="registerTDvalSmall">DEC: ' + parseInt(reg_val, 16) + ' | HI:LO: '+parseInt(reg_val.substring(0,2), 16)+':'+parseInt(reg_val.substring(2,4), 16)+'</span>');
-                        $("#content_"+reg_key).html(outstr);
+                  if ((init) || (regHistory["_10m"][reg_type] == undefined) || (regHistory["_10m"][reg_type][reg_key] == undefined)) {
+                      // reg has not been set before in regHistory so do it now
+                      if (regHistory["_10m"][reg_type] == undefined) {
+                        regHistory["updateTime"][reg_type] = {}
+                        regHistory["_10m"][reg_type] = {}
+                        regHistory["_60m"][reg_type] = {}
+                        regHistory["_24h"][reg_type] = {}
                       }
-                   }
-                }
-                regHistory["_10m"][reg_key].unshift(reg_val);
-                if  (regHistory["_10m"][reg_key].length > 120) {
-                   var removed = regHistory["_10m"][reg_key].pop  // remove the last element
-                }
+                      if (regHistory["_10m"][reg_type][reg_key] == undefined){
+                        regHistory["updateTime"][reg_type][reg_key] = 0;
+                        regHistory["_10m"][reg_type][reg_key] = [reg_val];
+                        regHistory["_60m"][reg_type][reg_key] = [reg_val, reg_val];
+                        regHistory["_24h"][reg_type][reg_key] = [reg_val, reg_val];
+                      }
+                  } else {
+                    if (reg_val != regHistory["_10m"][reg_type][reg_key][0]) {
+                        regHistory["updateTime"][reg_type][reg_key] = new Date().getTime();
 
-                if (regHistory["count_60m"] >= 12) {
-                   var min = 0;
-                   var max = 0;
-                   for (var i = 1; i <12; i++) {
-                       if (regHistory["_10m"][reg_key][i] > regHistory["_10m"][reg_key][max])
-                          max = i;
-                       if (regHistory["_10m"][reg_key][i] < regHistory["_10m"][reg_key][min])
-                          min = i;
-                   }
-                   regHistory["_60m"][reg_key].unshift(regHistory["_10m"][reg_key][((min > max) ? min : max)], regHistory["_10m"][reg_key][((min > max) ? max : min)]);
+                        if (printToScreen) {
+                          var outstr  = ((reg_key == "01f4") ? '<span class="registerTDvalMedium">HEX:<br>' + reg_val + '</span>' : 'HEX: '+reg_val) + '<br>';
+                              // This handles the case for byte data returning Not a Number (NaN) for coil registers that are one byte long
+                              var strHi = ((parseInt(reg_val) & 0xff00) >> 8).toString()
+                              var strLo = (parseInt(reg_val) & 0x00ff).toString()                    
+                              outstr += ((reg_key == "01f4") ? '' : '<span class="registerTDvalSmall">DEC: ' + parseInt(reg_val, 16) + ' | HI:LO: '+ strHi +':'+ strLo +'</span>');
+                          $("#content_"+reg_key).html(outstr);
+                        }
+                    }
+                  }
+                  // add the value to the begining of the array
+                  regHistory["_10m"][reg_type][reg_key].unshift(reg_val);
+                  if  (regHistory["_10m"][reg_type][reg_key].length > 120) {
+                    var removed = regHistory["_10m"][reg_type][reg_key].pop  // remove the last element
+                  }
 
-                   if  (regHistory["_60m"][reg_key].length > 120)
-                     regHistory["_60m"][reg_key].splice(-2, 2);  // remove the last 2 element
-                }
+                  if (regHistory["count_60m"] >= 12) {
+                    var min = 0;
+                    var max = 0;
+                    for (var i = 1; i <12; i++) {
+                        if (regHistory["_10m"][reg_type][reg_key][i] > regHistory["_10m"][reg_type][reg_key][max])
+                            max = i;
+                        if (regHistory["_10m"][reg_type][reg_key][i] < regHistory["_10m"][reg_type][reg_key][min])
+                            min = i;
+                    }
+                    regHistory["_60m"][reg_type][reg_key].unshift(regHistory["_10m"][reg_type][reg_key][((min > max) ? min : max)], regHistory["_10m"][reg_type][reg_key][((min > max) ? max : min)]);
 
-                if (regHistory["count_24h"] >= 288) {
-                   var min = 0;
-                   var max = 0;
-                   for (var i = 1; i <24; i++) {
-                       if (regHistory["_60m"][reg_key][i] > regHistory["_60m"][reg_key][max])
-                          max = i;
-                       if (regHistory["_60m"][reg_key][i] < regHistory["_60m"][reg_key][min])
-                          min = i;
-                   }
-                   regHistory["_24h"][reg_key].unshift(regHistory["_60m"][reg_key][((min > max) ? min : max)], regHistory["_60m"][reg_key][((min > max) ? max : min)]);
+                    if  (regHistory["_60m"][reg_type][reg_key].length > 120)
+                      regHistory["_60m"][reg_type][reg_key].splice(-2, 2);  // remove the last 2 element
+                  }
 
-                   if  (regHistory["_24h"][reg_key].length > 120)
-                     regHistory["_24h"][reg_key].splice(-2, 2);  // remove the last 2 element
-                }
-            });
+                  if (regHistory["count_24h"] >= 288) {
+                    var min = 0;
+                    var max = 0;
+                    for (var i = 1; i <24; i++) {
+                        if (regHistory["_60m"][reg_type][reg_key][i] > regHistory["_60m"][reg_type][reg_key][max])
+                            max = i;
+                        if (regHistory["_60m"][reg_type][reg_key][i] < regHistory["_60m"][reg_type][reg_key][min])
+                            min = i;
+                    }
+                    regHistory["_24h"][reg_type][reg_key].unshift(regHistory["_60m"][reg_type][reg_key][((min > max) ? min : max)], regHistory["_60m"][reg_type][reg_key][((min > max) ? max : min)]);
+
+                    if  (regHistory["_24h"][reg_type][reg_key].length > 120)
+                      regHistory["_24h"][reg_type][reg_key].splice(-2, 2);  // remove the last 2 element
+                  }
+              }); // end register data loop
+            });   // end register type loop
             regHistory["count_60m"] = ((regHistory["count_60m"] >= 12) ? 0 : regHistory["count_60m"]+1);
             regHistory["count_24h"] = ((regHistory["count_24h"] >= 288) ? 0 : regHistory["count_24h"]+1);
 
@@ -2938,27 +3493,36 @@ function UpdateRegisters(init, printToScreen)
                UpdateRegistersColor();
           }
           catch(err){
-              console.log("Error in UpdateRegisters" + err)
+              console.log("Error in UpdateRegisters: " + err)
           }
     }});
 }
 //*****************************************************************************
 function UpdateRegistersColor() {
     var CurrentTime = new Date().getTime();
-    $.each(regHistory["updateTime"], function( reg_key, update_time ){
+
+    var RegTypes = ['Holding', 'Inputs', 'Coils'];
+    $.each(RegTypes, function(i, reg_type){
+      if (!(regHistory["updateTime"].hasOwnProperty(reg_type))){
+        // no data for this register
+        return;
+      }
+      $.each(regHistory["updateTime"][reg_type], function( reg_key, update_time ){
         var difference = CurrentTime - update_time;
         var secondsDifference = Math.floor(difference/1000);
         if ((update_time > 0) && (secondsDifference >= fadeOffTime)) {
-           $("#content_"+reg_key).css("background-color", "#AAAAAA");
-           $("#content_"+reg_key).css("color", "red");
+           $("#content_"+ reg_type + '_'+ reg_key).css("background-color", "#AAAAAA");
+           $("#content_"+reg_type + '_'+ reg_key).css("color", "red");
         } else if ((update_time > 0) && (secondsDifference <= fadeOffTime)) {
            var hexShadeR = toHex(255-Math.floor(secondsDifference*85/fadeOffTime));
            var hexShadeG = toHex(Math.floor(secondsDifference*170/fadeOffTime));
            var hexShadeB = toHex(Math.floor(secondsDifference*170/fadeOffTime));
-           $("#content_"+reg_key).css("background-color", "#"+hexShadeR+hexShadeG+hexShadeB);
-           $("#content_"+reg_key).css("color", "black");
+           $("#content_"+reg_type + '_'+ reg_key).css("background-color", "#"+hexShadeR+hexShadeG+hexShadeB);
+           $("#content_"+reg_type + '_'+ reg_key).css("color", "black");
         }
+      });
     });
+    
 }
 //*****************************************************************************
 function printRegisters (type) {
@@ -2988,7 +3552,6 @@ function printRegisters (type) {
       dataDivider = 5;
     }
 
-
     $('<div id="printRegisterFrame" style="width:1000px"></div>').appendTo("#mydisplay");
 
     var now = new moment();
@@ -2996,47 +3559,56 @@ function printRegisters (type) {
     outstr += '<h2>As of: '+now.format("D MMMM YYYY H:mm:ss")+'<br><small>(data avilable since: '+regHistory["historySince"]+')</small></h2><br>';
     outstr += '<table width="1000px" border="0"><tr>';
 
-    $.each(Object.keys(data).sort(), function(i, reg_key) {
-        var max=data[reg_key][0];
-        var min=data[reg_key][0];
-        for (var j = 120; j >= 0; --j) {
-           if (data[reg_key][j] > max)
-              max = data[reg_key][j];
-           if (data[reg_key][j] < min)
-              min = data[reg_key][j];
-        }
-
-        if ((i % 3) == 0){
-          pageHeight += rowHeight;
-          if (pageHeight < 100) {
-             outstr += '</tr><tr>';
-          } else {
-             outstr += '</tr></table><div class="pagebreak"> </div><table width="1000px" border="0"><tr>';
-             pageHeight = 0;
+    var data_length = 0;
+    var RegTypes = ['Holding', 'Inputs', 'Coils'];
+    $.each(RegTypes, function(i, reg_type){
+      if (!(data.hasOwnProperty(reg_type))){
+        // no data for this register
+        return;
+      }
+      $.each(Object.keys(data[reg_type]).sort(), function(i, reg_key) {
+          data_length += 1;
+          var max=data[reg_type][reg_key][0];
+          var min=data[reg_type][reg_key][0];
+          for (var j = 120; j >= 0; --j) {
+            if (data[reg_type][reg_key][j] > max)
+                max = data[reg_type][reg_key][j];
+            if (data[reg_type][reg_key][j] < min)
+                min = data[reg_type][reg_key][j];
           }
-          rowHeight = 15;
-        }
 
-        var reg_val = data[reg_key][0];
+          if ((i % 3) == 0){
+            pageHeight += rowHeight;
+            if (pageHeight < 100) {
+              outstr += '</tr><tr>';
+            } else {
+              outstr += '</tr></table><div class="pagebreak"> </div><table width="1000px" border="0"><tr>';
+              pageHeight = 0;
+            }
+            rowHeight = 15;
+          }
 
-        outstr += '<td width="33%" class="printRegisterTD">';
-        outstr +=     '<table width="333px" heigth="100%" id="val_'+reg_key+'">';
-        outstr +=     '<tr><td align="center" class="printRegisterTDsubtitle">' + reg_key + '</td></tr>';
-        outstr +=     '<tr><td align="center" class="printRegisterTDtitle">' + BaseRegistersDescription[reg_key] + '</td></tr>';
-        outstr +=     '<tr><td align="center" class="printRegisterTDsubtitle">Current Value: ' + regHistory["_10m"][reg_key][0] + '</td></tr>';
-        if (min != max) {
-          outstr +=     '<tr><td align="center" class="printRegisterTDsubtitle">Minimum Value: '+min+'<br>Maximum Value: '+max+'</td></tr>';
-          outstr +=     '<tr><td align="center" class="regHistoryPlotCell"><div id="printPlot_'+reg_key+'"></div></td></tr>';
-          plots.push(reg_key);
-          rowHeight = 45;
-        } else {
-          outstr +=     '<tr><td align="center" class="printRegisterTDvalMedium">no change</td></tr>';
-        }
-        outstr +=     '</table>';
-        outstr += '</td>';
+          var reg_val = data[reg_type][reg_key][0];
+
+          outstr += '<td width="33%" class="printRegisterTD">';
+          outstr +=     '<table width="333px" heigth="100%" id="val_'+reg_type+'_'+reg_key+'">';
+          outstr +=     '<tr><td align="center" class="printRegisterTDsubtitle">' + reg_type+':'+reg_key + '</td></tr>';
+          outstr +=     '<tr><td align="center" class="printRegisterTDtitle">' + BaseRegistersDescription[reg_type][reg_key] + '</td></tr>';
+          outstr +=     '<tr><td align="center" class="printRegisterTDsubtitle">Current Value: ' + regHistory["_10m"][reg_type][reg_key][0] + '</td></tr>';
+          if (min != max) {
+            outstr +=     '<tr><td align="center" class="printRegisterTDsubtitle">Minimum Value: '+min+'<br>Maximum Value: '+max+'</td></tr>';
+            outstr +=     '<tr><td align="center" class="regHistoryPlotCell"><div id="printPlot_'+reg_type+'_'+reg_key+'"></div></td></tr>';
+            plots.push(reg_key);
+            rowHeight = 45;
+          } else {
+            outstr +=     '<tr><td align="center" class="printRegisterTDvalMedium">no change</td></tr>';
+          }
+          outstr +=     '</table>';
+          outstr += '</td>';
+      });
     });
-    if ((Object.keys(data).length % 3) > 0) {
-      for (var i = (Object.keys(data).length % 3); i < 3; i++) {
+    if ((data_length % 3) > 0) {
+      for (var i = (data_length % 3); i < 3; i++) {
           outstr += '<td width="333px" class="printRegisterTD"></td>';
        }
     }
@@ -3096,19 +3668,20 @@ function DisplayAdvancedSettings(){
         $.extend($.idealforms.rules, {
            // The rule is added as "ruleFunction:arg1:arg2"
            HTTPAddress: function(input, value, arg1, arg2) {
-             var regex = RegExp("^http[s]?:\\/\\/(([a-z0-9]+([\-\\.]{1}[a-z0-9]+)*\\.[a-z]{2,5}(\/.*)?)|(localhost(\/.*)?))$", 'g');
+             //var regex = RegExp("^http[s]?:\\/\\/(([a-z0-9]+([-\\.]{1}[a-z0-9]+)*\\.[a-z]{2,5}(\/.*)?)|(localhost(\/.*)?))$", 'g');
+             var regex = RegExp("^(?:https?:\/\/)(?!$)(?:www\.)?[a-zA-Z]*(?:\.[a-zA-Z]{2,6})?(?:(?:\d{1,3}\.){3}\d{1,3})?", 'g');
              return regex.test(value);
            },
            InternetAddress: function(input, value, arg1, arg2) {
-             var regex = RegExp("^(([a-z0-9]+([\-\\.]{1}[a-z0-9]+)*\\.[a-z]{2,5}(\/.*)?)|(localhost(\/.*)?))$", 'g');
+             var regex = RegExp("^(([a-z0-9]+([-\\.]{1}[a-z0-9]+)*\\.[a-z]{2,5}(\/.*)?)|(localhost(\/.*)?))$", 'g');
              return regex.test(value);
            },
            IPAddress: function(input, value, arg1, arg2) {
-             var regex = RegExp("^(((25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)\.(25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)\.(25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)\.(25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)(\/.*)?)|(localhost(\/.*)?))$", 'g');
+             var regex = RegExp("^(((25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?).(25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?).(25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?).(25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)(\/.*)?)|(localhost(\/.*)?))$", 'g');
              return regex.test(value);
            },
            InternationalPhone: function(input, value, arg1, arg2) {
-             var regex = RegExp('^(\\+(\\d{1,3}))?((\\(\\d{1,4}\\))|(\\d{1,3}))?(\\s|\-)?(\\d+(\\s?|\-?))+$', 'g');
+             var regex = RegExp('^[0-9\-().+\s]{10,20}$', 'g');
              return regex.test(value);
            },
            UnixFile: function(input, value, arg1, arg2) {
@@ -3142,7 +3715,7 @@ function DisplayAdvancedSettings(){
 }
 
 //*****************************************************************************
-// called when Save Settings is clicked
+// called when Save Advanced Settings is clicked
 //*****************************************************************************
 function saveAdvancedSettings(){
 
@@ -3514,6 +4087,7 @@ function GetBaseStatus()
 
           myGenerator['MonitorTime'] = result['MonitorTime'];
           myGenerator['RunHours'] = result['RunHours'];
+          myGenerator['AltDateformat'] = result['AltDateformat']
           if (myGenerator['version'].length > 0) {
              if (myGenerator['version'] != result['version']) {
                 myGenerator['version'] = result['version'];
